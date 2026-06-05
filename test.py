@@ -43,6 +43,9 @@ class SpaghettiMonitor:
 
 
     def should_shoot(self):
+        """
+        Currently returns True only if the printer is actually printing
+        """
         # add counter which captures some images also after stopped?
         # currently only returns true if the printer is printing
         if self.status == "printing":
@@ -55,6 +58,9 @@ class SpaghettiMonitor:
 
 
     def _capture_image(self, path):
+        """
+        Non async function that captures the image
+        """
         request = self.picam2.capture_request()
         try:
             request.save("main", str(path))
@@ -65,6 +71,10 @@ class SpaghettiMonitor:
 
 
     async def capture_loop(self):
+        """
+        Calls the image capturing function according to specified frequency.
+        Calling the capture function is offloaded to a thread to avoid blocking.
+        """
         next_shot = time.monotonic()
         while True:
             next_shot += FREQUENCY
@@ -83,6 +93,9 @@ class SpaghettiMonitor:
 
 
     async def subscribe(self, ws):
+        """
+        Subscribes to Moonraker printer status updates and updates self.state
+        """
         payload = {
             "jsonrpc": "2.0",
             "method": "printer.objects.subscribe",
@@ -111,6 +124,10 @@ class SpaghettiMonitor:
 
 
     async def connect_with_backoff(self, uri):
+        """
+        Connects to Moonraker using a websocket, see
+        https://websocket.org/guides/languages/python/
+        """
         delay = 1
         while True:
             try:
