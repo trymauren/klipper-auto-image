@@ -12,6 +12,7 @@ ID = 5664 # some number
 FREQUENCY = 1 # images per second
 logger = logging.getLogger(__name__)
 OUTPUT_ROOT = Path("captured_images_test")
+ADDRESS = "ws://ratrig.labnet:7125/websocket"
 
 class SpaghettiMonitor:
 
@@ -166,4 +167,4 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()    
     logging.basicConfig(level=args.loglevel)
-    asyncio.run(main("ws://ratrig.labnet:7125/websocket"))
+    asyncio.run(main(ADDRESS))
