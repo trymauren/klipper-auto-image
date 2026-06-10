@@ -23,7 +23,7 @@ class SpaghettiMonitor:
         some_controls = {
             "AeEnable": False,
             "AwbEnable": False,
-            "ExposureTime": 10000,        # microseconds (1/100 s)
+            "ExposureTime": 100_000        # microseconds
             # "AnalogueGain": 4.0,
             # "ColourGains": (1.8, 1.6),   # (red, blue)
             }
