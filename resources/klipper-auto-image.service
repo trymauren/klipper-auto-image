@@ -1,0 +1,15 @@
+[Unit]
+Description=Always-on semi-standalone image capture
+Documentation=https://github.com/trymauren/klipper-auto-image
+After=udev.service network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=/home/__USER__/klipper-auto-image
+ExecStart=/bin/bash /usr/local/bin/klipper-auto-image --config /home/__USER__/printer_data/config/klipper-auto-image.conf -v
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

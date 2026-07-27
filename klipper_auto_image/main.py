@@ -1,47 +1,40 @@
 #!/usr/bin/env python
-import argparse
-import logging
-import json
 import asyncio
-import websockets
+import json
+import logging
 import time
-from picamera2 import Picamera2
 from pathlib import Path
 
-ID = 5664 # some number
-FREQUENCY = 1 # images per second
-logger = logging.getLogger(__name__)
-OUTPUT_ROOT = Path("captured_images_test")
-ADDRESS = "ws://ratrig.labnet:7125/websocket"
+import websockets
+from picamera2 import Picamera2
 
-class SpaghettiMonitor:
+from klipper_auto_image import custom_logger as logger
+from klipper_auto_image import parsing_utils
 
-    def __init__(self):
-        self.status = "standby"
+ID = 5664  # some number for websocket
+
+
+class AutoImager:
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.printer_state = "standby"
         self.picam2 = Picamera2()
 
-        some_controls = {
-            "AeEnable": False,
-            "AwbEnable": False,
-            "ExposureTime": 100_000        # microseconds
-            # "AnalogueGain": 4.0,
-            # "ColourGains": (1.8, 1.6),   # (red, blue)
-            }
-
+        # some_controls = {
+        #     "AeEnable": False,
+        #     "AwbEnable": False,
+        #     "ExposureTime": 50_000        # microseconds
+        #     }
+        logger.debug(cfg.controls)
         config = self.picam2.create_still_configuration(
-            main={"format": "RGB888"},
-            # buffer_count=4,
-            controls=some_controls,
+            # main={"format": "RGB888"},
+            controls=cfg.controls
         )
-        
-        self.picam2.configure(config) # before-start configuration
+        self.picam2.configure(config)  # before-start configuration
         self.picam2.start()
-    
-        self.run_dir = OUTPUT_ROOT / time.strftime("%Y%m%d-%H%M%S")
-        logger.debug("Created directory %s", self.run_dir)
-        self.run_dir.mkdir(parents=True, exist_ok=True)
-        self._frame_index = 0
 
+        self.out_dir = self.cfg.output_dir
+        self._frame_index = 0
 
     def should_shoot(self):
         """
@@ -49,14 +42,19 @@ class SpaghettiMonitor:
         """
         # add counter which captures some images also after stopped?
         # currently only returns true if the printer is printing
-        if self.status == "printing":
+        if self.printer_state == "printing":
             return True
-        elif self.status in ["standby", "paused", "error", "cancelled", "complete"]:
+        elif self.printer_state in [
+            "standby",
+            "paused",
+            "error",
+            "cancelled",
+            "complete",
+        ]:
             return False
         else:
-            logger.warn("Something is not right, printer status is unknown!")
+            logger.warning("Printer status is unknown")
             return False
-
 
     def _capture_image(self, path):
         """
@@ -70,32 +68,30 @@ class SpaghettiMonitor:
             request.release()
             logger.debug("Released cam")
 
-
     async def capture_loop(self):
         """
         Calls the image capturing function according to specified frequency.
-        Calling the capture function is offloaded to a thread to avoid blocking.
+        The call is offloaded to a thread to avoid blocking.
         """
         next_shot = time.monotonic()
         while True:
-            next_shot += FREQUENCY
+            next_shot += 1 / self.cfg.fps
 
             await asyncio.sleep(max(0.0, next_shot - time.monotonic()))
-    
-            logger.debug("Recorded printer status: %s", self.status)
+
+            logger.debug("Recorded printer status: %s", self.printer_state)
             if not self.should_shoot():
                 # printer is not printing or similar
                 continue
- 
+
             self._frame_index += 1
-            path = self.run_dir / f"frame_{self._frame_index:06d}.jpg"
+            path = self.out_dir / f"frame_{self._frame_index:06d}.jpg"
             # Since picamera is blocking, it must be offloaded
             await asyncio.to_thread(self._capture_image, path)
 
-
     async def subscribe(self, ws):
         """
-        Subscribes to Moonraker printer status updates and updates self.state
+        Subscribes to Moonraker printer status updates and updates self.printer_state
         """
         payload = {
             "jsonrpc": "2.0",
@@ -108,21 +104,30 @@ class SpaghettiMonitor:
         while True:
             msg = json.loads(await ws.recv())
 
+            printer_state = self.printer_state
+
             if msg.get("id") == ID:
-                self.status = status = msg["result"]["status"]["print_stats"]["state"]
-                logger.debug("REPLY: %s", status)
+                printer_state = msg["result"]["status"]["print_stats"]["state"]
+                logger.debug("REPLY: %s", printer_state)
                 logger.info("Successfully subscribed to printer state event")
-                
+
             elif msg.get("method") == "notify_status_update":
-                changed = msg["params"][0] # first in params are the changed fields
+                changed = msg["params"][0]  # first in params are the changed fields
                 logger.debug("UPDATE: %s", changed)
                 stats = changed.get("print_stats", {})
                 if "state" in stats:
-                    self.status = status = stats["state"]
+                    printer_state = stats["state"]
 
             else:
                 logger.debug("OTHER: %s", msg.get("method"))
 
+            if self.printer_state != "printing" and printer_state == "printing":
+                self.out_dir = self.cfg.output_dir / time.strftime("%Y%m%d-%H%M%S")
+                logger.debug("Created directory %s", self.out_dir)
+                self.out_dir.mkdir(parents=True, exist_ok=True)
+                self._frame_index = 0
+
+            self.printer_state = printer_state
 
     async def connect_with_backoff(self, uri):
         """
@@ -142,29 +147,24 @@ class SpaghettiMonitor:
                 delay = min(delay * 2, 30)
 
 
-async def main(uri):
-    sm = SpaghettiMonitor()
+async def _run(cfg):
+    cfg = parsing_utils.get_config()
+    ai = AutoImager(cfg)
     try:
         async with asyncio.TaskGroup() as tg:
-            tg.create_task(sm.connect_with_backoff(uri)) # connects to websocket and subscribes to printer state
-            tg.create_task(sm.capture_loop()) # captures images
+            tg.create_task(
+                ai.connect_with_backoff(cfg.ws_uri)
+            )  # connects to websocket and subscribes to printer state
+            tg.create_task(ai.capture_loop())  # captures images
     finally:
-        sm.picam2.stop()
+        ai.picam2.stop()
+
+
+def run():
+    cfg = parsing_utils.get_config()
+    logger.setup_logging(log_level=cfg.loglevel)
+    asyncio.run(_run(cfg))
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        '-d', '--debug',
-        help="Print lots of debugging statements",
-        action="store_const", dest="loglevel", const=logging.DEBUG,
-        default=logging.WARNING,
-    )
-    parser.add_argument(
-        '-v', '--verbose',
-        help="Be verbose",
-        action="store_const", dest="loglevel", const=logging.INFO,
-    )
-    args = parser.parse_args()    
-    logging.basicConfig(level=args.loglevel)
-    asyncio.run(main(ADDRESS))
+    run()
