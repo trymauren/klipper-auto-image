@@ -52,17 +52,6 @@ uninstall: ## Uninstall Klipper auto image
 update: ## Update Klipper auto image (via git Repository)
 	@git fetch && git pull
 
-upgrade-moonraker: ## In case of old version of Klipper auto image being upgraded to newer version with Moonraker update manager compatibility
-	@printf "Upgrading systemctl ...\n"
-	@sudo cp -f "${PWD}/resources/klipper-auto-image.service" $(SYSTEMD)
-	@sudo sed -i "s/__USER__/$(USER)/g" $(SYSTEMD)/klipper-auto-image.service
-	@printf "Saving backup of moonraker.asvc file as %s ...\n" $(PRINTER_DATA_PATH)/moonraker.asvc.bak
-	@sudo cp -f $(PRINTER_DATA_PATH)/moonraker.asvc $(PRINTER_DATA_PATH)/moonraker.asvc.bak
-	@printf "Upgrading Moonraker update manager authorization ...\n"
-	@sudo sed -i '/klipper-auto-image/d' $(PRINTER_DATA_PATH)/moonraker.asvc
-	@sudo echo "klipper-auto-image" >> $(PRINTER_DATA_PATH)/moonraker.asvc
-	@printf "Upgrade completed ...\n"
-
 help: ## Show this help
 	@printf "\nKlipper auto image Install Helper:\n"
 	@grep -E -h '\s##\s' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
