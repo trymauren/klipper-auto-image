@@ -7,6 +7,7 @@ import sys
 
 import websockets
 
+from klipper_auto_image import custom_logger as logger
 from klipper_auto_image import exceptions, parsing_utils
 
 ID = 5664  # some number
@@ -25,6 +26,13 @@ async def handler(websocket):
                 {
                     "method": "notify_status_update",
                     "params": [{"print_stats": {"state": state_to_test}}],
+                }
+            )
+            websockets.broadcast(CLIENTS, data)
+            data = json.dumps(
+                {
+                    "method": "server.info",
+                    "klippy_state": "ready",
                 }
             )
             websockets.broadcast(CLIENTS, data)
@@ -64,11 +72,31 @@ async def subscribe(ws):
                 logger.info("printer state: %s", stats["state"])
 
 
+async def klippy_ready(ws):
+    msg_id = 9000
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "server.info",
+        "id": msg_id,
+    }
+    print("hei")
+    await ws.send(json.dumps(payload))
+    print("hei")
+    while True:
+        msg = json.loads(await ws.recv()) 
+        if msg.get("method") == "server_info":
+            klippy_state = msg["klippy_state"]
+            logger.debug("Klippy state: %s", klippy_state)
+            if klippy_state == "ready":
+                return True
+
+
 async def ws_client(uri):
     delay = 1
     while True:
         try:
             async with websockets.connect(uri) as ws:
+                # await klippy_ready(ws)
                 await subscribe(ws)
 
         except (websockets.ConnectionClosed, OSError) as e:
@@ -95,7 +123,7 @@ async def test():
     except ImportError:
         # Testing the dummy-server with a dummy client since picamera2 is not available
         logger.warning(
-            "!!Using dummy client since we are probably not on a raspberry pi with picamera2 available!!"
+            "!!Using dummy client since we are PROBABLY not on a raspberry pi with picamera2 available!!"
         )
         client = ws_client(cfg.ws_uri)
     else:
