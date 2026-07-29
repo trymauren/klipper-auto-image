@@ -6,7 +6,7 @@ set -Eeou pipefail # Error handling
 
 # KAI = klipper-auto-image
 BASE_KAI_PATH="$(dirname "$(dirname "$(readlink -fm "$0")")")"
-PY_BIN="${BASE_KAI_PATH}/.venv/bin/python"
+PY_BIN="${HOME}/.local/bin/uv"
 KAI_CFG="${HOME}/printer_data/config/klipper-auto-image.conf"
 
 debug_msg() {
@@ -25,23 +25,7 @@ wrong_args_msg() {
     echo -e "\n\tTry: klipper-auto-image -h\n"
 }
 
-check_py_version() {
-    local version
-    if [[ -n "${PY_BIN}" ]]; then
-        version=$("${PY_BIN}" -V | cut -d" " -f2 | cut -d"." -f1)
-    else
-        printf "ERROR: Python interpreter is not installed! [EXITING]\n"
-        exit 1
-    fi
-    if [[ -n "${version}" ]] && [[ "${version}" = "3" ]]; then
-        printf "INFO: Python interpreter Version %s found ... [OK]\n" "$("${PY_BIN}" -V)"
-    elif [[ -n "${version}" ]] && [[ "${version}" = "2" ]]; then
-        printf "ERROR: Python interpreter Version 3 is required! [EXITING]\n"
-        exit 1
-    fi
-}
-
-"${PY_BIN}" "${BASE_KAI_PATH}/run.py" "$@"
+"${PY_BIN}" run "${BASE_KAI_PATH}/run.py" "$@"
 
 ### Loop to keep running
 while true; do

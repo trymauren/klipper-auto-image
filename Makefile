@@ -23,9 +23,6 @@ install: ## Install klipper auto image as service
 		exit 1; \
 	fi
 	@mkdir -p $(CONF_PATH)
-	@printf "\nInstall virtual environment ...\n"
-	@python -m venv --system-site-packages .venv
-	@. .venv/bin/activate && pip install -r requirements.txt
 	@printf "\nCopying systemd service file ...\n"
 	@sudo cp -f "${PWD}/resources/klipper-auto-image.service" $(SYSTEMD)
 	@sudo sed -i "s/__USER__/$(USER)/g" $(SYSTEMD)/klipper-auto-image.service
