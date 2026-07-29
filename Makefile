@@ -22,6 +22,9 @@ install: ## Install klipper auto image as service
 		echo "Please run without sudo/not as root"; \
 		exit 1; \
 	fi
+	@sudo apt install python3-picamera2 --no-install-recommends
+	@uv venv --system-site-packages --clear
+	@. .venv/bin/activate
 	@mkdir -p $(CONF_PATH)
 	@printf "\nCopying systemd service file ...\n"
 	@sudo cp -f "${PWD}/resources/klipper-auto-image.service" $(SYSTEMD)
