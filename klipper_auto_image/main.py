@@ -15,42 +15,71 @@ from klipper_auto_image import parsing_utils
 class AutoImager:
     def __init__(self, cfg):
         self.cfg = cfg
-        self.printer_state = "websocket disconnected" # not a Moonraker response value
-        self.klippy_state = "klippy disconnected" # not a Moonraker response value
+        self.printer_state = "websocket_disconnected" # not a Moonraker response value
+        self.klippy_state = "klippy_disconnected" # not a Moonraker response value
         self.websocket_disconnect_count = 0
+        self.print_finished_count = 0
+        self.current_layer = 0
+        self.total_layer = 0
+        self._frame_index = 0 
+        self.metadata_saved = True
+        self.out_dir = self.cfg.output_dir
+        # logger.info("Available cameras: %s", Picamera2.global_camera_info())
         self.picam2 = Picamera2()
 
-        # some_controls = {
-        #     "AeEnable": False,
-        #     "AwbEnable": False,
-        #     "ExposureTime": 50_000        # microseconds
-        #     }
-        logger.debug(cfg.controls)
+        logger.debug("Configured controls %s", cfg.controls)
         config = self.picam2.create_still_configuration(
-            # main={"format": "RGB888"},
             controls=cfg.controls
         )
         self.picam2.configure(config)  # before-start configuration
         self.picam2.start()
-
-        self.out_dir = self.cfg.output_dir
+    
+    def new_print_session(self):
+        self.out_dir = self.cfg.output_dir / time.strftime("%Y%m%d-%H%M%S")
+        logger.debug("Created directory %s", self.out_dir)
+        self.out_dir.mkdir(parents=True, exist_ok=True)
         self._frame_index = 0
+        self.metadata_saved = False
+
+    def update_printer_state(self, new_state):
+        if new_state == self.printer_state:
+            return
+
+        old_state = self.printer_state
+        
+        if new_state == "printing" and old_state != "printing":
+            self.new_print_session()
+        
+        elif new_state in ["cancelled", "error", "complete"] and old_state == "printing":
+            new_state = "after_printing" 
+ 
+        self.printer_state = new_state
 
     def should_shoot(self):
         """
         Currently returns True only if the printer is actually printing
         """
-        # add counter which captures some images also after stopped?
-        # currently only returns true if the printer is printing
-        if self.printer_state == "printing" and self.klippy_state == "ready":
-            return True
+        if self.klippy_state == "ready":
+            if self.printer_state == "printing" and self.current_layer > 0:
+                return True
+            elif self.printer_state == "after_printing":
+                if self.print_finished_count < 5:
+                    self.print_finished_count += 1
+                    return True
+                else:
+                    self.update_printer_state("finished_capturing_after")
+                    self.print_finished_count = 0
+                    self.current_layer = 0
+                    self.total_layer = 0
+            return False
+
         elif self.printer_state in [
             "standby",
             "paused",
             "error",
             "cancelled",
             "complete",
-            "websocket disconnected",
+            "websocket_disconnected",
         ] or self.klippy_state in ["error", "shutdown", "startup", "disconnected"]:
             return False
         else:
@@ -83,7 +112,7 @@ class AutoImager:
             await asyncio.sleep(max(0.0, next_shot - time.monotonic()))
 
             if not self.should_shoot():
-                self.websocket_disconnect_count += int(self.printer_state == "websocket disconnected")                          
+                self.websocket_disconnect_count += int(self.printer_state == "websocket_disconnected")                          
                 # printer is not printing or similar
                 continue
             self._frame_index += 1
@@ -100,19 +129,39 @@ class AutoImager:
         payload = {
             "jsonrpc": "2.0",
             "method": "printer.objects.subscribe",
-            "params": {"objects": {"print_stats": "state"}},
+            "params": {"objects": {"print_stats": ["state", "info"]}},
             "id": msg_id,
         }
         while True:
             await ws.send(json.dumps(payload))
             await self.monitor_printer(ws, msg_id)
-        
+ 
     
     async def monitor_printer(self, ws, msg_id):
+
         while self.websocket_disconnect_count < 10:
             msg = json.loads(await ws.recv())
 
             printer_state = self.printer_state
+            
+            if not self.metadata_saved: 
+                payload = {
+                    "jsonrpc": "2.0",
+                    "method": "server.history.list",
+                    "params":{
+                        "limit": 1,
+                        "order": "desc"
+                    },
+                    "id": 5656
+                }
+                await ws.send(json.dumps(payload))
+                msg = json.loads(await ws.recv())
+                metadata = msg.get('result').get('jobs')[0]
+                logger.debug("Metadata: %s", metadata) 
+                file_path = self.out_dir / f"metadata.json"
+                with open(file_path, 'w') as fp:
+                    json.dump(metadata, fp)
+                self.metadata_saved = True
 
             if msg.get("id") == msg_id:
                 if msg.get("result") is not None:
@@ -132,19 +181,21 @@ class AutoImager:
                 stats = changed.get("print_stats", {})
                 if "state" in stats:
                     printer_state = stats["state"]
+                if "info" in stats:
+                    self.current_layer = stats["info"]["current_layer"]
+                    self.total_layer = stats["info"]["total_layer"]
+
+            # elif msg.get("method") == "notify_proc_stat_update":
+            #     logger.debug(msg)
+            #
+            # elif msg.get("method") == "notify_gcode_response":
+            #     logger.debug(msg)
 
             else:
                 logger.debug("Other: %s", msg.get("method"))
-
-            if self.printer_state != "printing" and printer_state == "printing":
-                self.out_dir = self.cfg.output_dir / time.strftime("%Y%m%d-%H%M%S")
-                logger.debug("Created directory %s", self.out_dir)
-                self.out_dir.mkdir(parents=True, exist_ok=True)
-                self._frame_index = 0
-
-            self.printer_state = printer_state
             
-            # Changed if-else, not verified after.
+            self.update_printer_state(printer_state)
+
             while True:
                 if await self.klippy_ready(ws):
                     break
@@ -202,7 +253,7 @@ class AutoImager:
                     await self.subscribe(ws)
 
             except (websockets.ConnectionClosed, OSError) as e:
-                self.printer_state = "websocket disconnected"
+                self.printer_state = "websocket_disconnected"
                 wait = min(delay, 30)
                 logger.info(f"Disconnected ({e}), retry in {wait:.1f}s")
                 await asyncio.sleep(wait)
@@ -220,7 +271,6 @@ async def _run(cfg):
             )
             # captures images
             tg.create_task(ai.capture_loop())
-            # monitors klippy status
     finally:
         ai.picam2.stop()
 
