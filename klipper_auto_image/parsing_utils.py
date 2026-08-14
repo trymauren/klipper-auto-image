@@ -13,20 +13,21 @@ def build_parser():
     p.add_argument("--config", type=Path, default=None)
     p.add_argument("--resolution", default="1920x1080")
     p.add_argument("--ws_uri", type=str, default=None)
-    # argparse.BooleanOptionalAction makes it possible to override an arg back to false, even though it is configured in a config file to true,
-    # as opposed to store_true, which is one-directional
-    # p.add_argument("--hflip", action=argparse.BooleanOptionalAction, default=False)
-    p.add_argument(
-        "-c",
-        "--controls",
-        default={},
-        type=str,
-        action="extend",
-        nargs="*",
-        help="Camera controls to be used by picamera2"
-        "Can be used multiple times.\n"
-        "Format: <control>=<value>",
-    )
+    # # argparse.BooleanOptionalAction makes it possible to override an arg back to false, even though it is configured in a config file to true,
+    # # as opposed to store_true, which is one-directional
+    # # p.add_argument("--hflip", action=argparse.BooleanOptionalAction, default=False)
+    # p.add_argument(
+    #     "-c",
+    #     "--controls",
+    #     default={},
+    #     type=str,
+    #     action="extend",
+    #     nargs="*",
+    #     help="Camera controls to be used by picamera2"
+    #     "Can be used multiple times.\n"
+    #     "Format: <control>=<value>",
+    # )
+    p.add_argument("--cam", default={}, nargs="+", action="extend")
     p.add_argument("--fps", type=int, default=1)
     p.add_argument("--output_dir", type=Path, default=Path("/tmp"))
 
@@ -65,7 +66,8 @@ def get_config(argv=None):
         cfg = {
             k.replace("-", "_"): v for k, v in cfg.items()
         }  # convert "-" to "_" without erroring
-
+        # print(cfg)
+        # exit()
         parser.set_defaults(**cfg)
         args = parser.parse_args(argv)  # re-parse: config now backs the defaults
     return args

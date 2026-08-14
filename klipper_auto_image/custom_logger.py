@@ -14,7 +14,7 @@ picamera2_logger = logging.getLogger("picamera2")
 def setup_logging(log_level=logging.INFO):
     log_path = Path(os.path.expanduser("~/printer_data/logs"))
     log_path.mkdir(parents=True, exist_ok=True)
-    log_file = log_path / "log"
+    log_file = log_path / "klipper-auto-image.log"
     log_file_formatter = logging.Formatter(
         "%(levelname)s %(name)s [%(asctime)s] %(message)s"
     )

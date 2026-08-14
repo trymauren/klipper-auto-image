@@ -11,7 +11,30 @@ from picamera2 import Picamera2
 from klipper_auto_image import custom_logger as logger
 from klipper_auto_image import parsing_utils
 
+import requests
+from PIL import Image
+from io import BytesIO
 
+"""
+From docs:
+
+The configuration of Picamera2 therefore divides into:
+    
+    • General parameters that apply globally to the Picamera2 system and across the whole of the ISP.
+
+    • And per-stream configuration within the ISP that determines the output formats and sizes of the main and lores streams.
+        We note that the main stream is always defined and delivered to the application, using default values if the application did
+        not explicitly request one.
+
+    • Some applications need to be able to control the mode (resolution, bit depth and so on) that the sensor is running in. This
+        can be done using the sensor part of the camera configuration or, if this is absent, it will be inferred from the specification
+        of the raw stream (if present).
+
+    • Mostly, a configuration does not include camera settings that can be changed at runtime (such as brightness or contrast).
+        However, certain use cases do sometimes have particular preferences about certain of these control values, and they can
+        be stored as part of a configuration so that applying the configuration will apply the runtime controls automatically too.
+
+"""
 class AutoImager:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -24,20 +47,65 @@ class AutoImager:
         self._frame_index = 0 
         self.metadata_saved = True
         self.out_dir = self.cfg.output_dir
-        # logger.info("Available cameras: %s", Picamera2.global_camera_info())
-        self.picam2 = Picamera2()
+        self.register_cameras() 
 
-        logger.debug("Configured controls %s", cfg.controls)
-        config = self.picam2.create_still_configuration(
-            controls=cfg.controls
-        )
-        self.picam2.configure(config)  # before-start configuration
-        self.picam2.start()
+    def register_cameras(self):
+        picamera_info = Picamera2.global_camera_info()
+        logger.info("Available cameras: %s", picamera_info)
+        picams = []
+        usbcams = []
+        registered_devices = []
+        for available_cam in picamera_info:
+            for configured_cam in self.cfg.cam:
+                if available_cam["Id"] == configured_cam["device"] and configured_cam["device"] not in registered_devices:
+                    if configured_cam["type"] == "rpi":
+                        picams.append(available_cam)
+                        registered_devices.append(configured_cam["device"])
+                    elif configured_cam["type"] == "usb":
+                        usbcams.append(available_cam)
+                        registered_devices.append(configured_cam["device"])
+
+        logger.info("Will capture images from the following raspberry pi (++) cameras: %s", picams)
+        logger.info("Will capture images from the following usb cameras: %s", usbcams)
+
+        self.cams = [] 
+        self.cam_names = []
+
+        for cam in picams:
+            picam_idx = cam["Num"]
+            new_cam = Picamera2(picam_idx)
+            logger.info("Available sensor modes for camera %s: %s", cam["Model"], new_cam.sensor_modes)
+            cfg = new_cam.create_still_configuration(
+                # controls=self.cfg.controls
+            )
+            new_cam.configure(cfg)
+            logger.info("Registered the following configuration for %s: %s", cam["Model"], new_cam.camera_configuration())
+            self.cams.append(new_cam)
+            self.cam_names.append(cam["Model"])
+        for cam in usbcams:
+            picam_idx = cam["Num"]
+            new_cam = Picamera2(picam_idx)
+            logger.info("Available sensor modes for camera %s: %s", cam["Model"], new_cam.sensor_modes)
+            cfg = new_cam.create_still_configuration(
+                # controls=cfg.controls
+            )
+            new_cam.configure(cfg)
+            logger.info("Registered the following configuration for %s: %s", cam["Model"], new_cam.camera_configuration())
+            self.cams.append(new_cam)
+            self.cam_names.append(cam["Model"])
+
+        for cam in self.cams:
+            cam.start()
+
+        # The code in this function could be made simpler if we dont need to distinguish between usb and picams
+
     
     def new_print_session(self):
         self.out_dir = self.cfg.output_dir / time.strftime("%Y%m%d-%H%M%S")
-        logger.debug("Created directory %s", self.out_dir)
-        self.out_dir.mkdir(parents=True, exist_ok=True)
+        for name in self.cam_names:
+            cam_dir = self.out_dir / name
+            cam_dir.mkdir(parents=True, exist_ok=True)
+            logger.debug("Created directory %s", cam_dir)
         self._frame_index = 0
         self.metadata_saved = False
 
@@ -86,17 +154,48 @@ class AutoImager:
             logger.warning("Printer status is unknown")
             return False
 
-    def _capture_image(self, path):
-        """
-        Non async function that captures the image
-        """
-        request = self.picam2.capture_request()
-        try:
-            request.save("main", str(path))
-            logger.debug("Captured %s", path.name)
-        finally:
-            request.release()
-            logger.debug("Released cam")
+#     def _capture_images(self, path):
+#         # """
+#         # Non async function that captures the image
+#         # """
+#         # request = self.picam2.capture_request()
+#         # try:
+#         #     request.save("main", str(path))
+#         #     logger.debug("Captured %s", path.name)
+#         # finally:
+#         #     request.release()
+#         #     logger.debug("Released cam")
+#
+#         # crowsnest/mjpeg url:
+#
+#         url = "http://localhost:8080/webcam/?action=snapshot"
+#         # spyglass default url:
+#         # url = "http://localhost:8080/snapshot"
+#
+# #        # response = requests.get(url, timeout=10)
+# #        # img = Image.open(BytesIO(response.content))
+# #        # img.save("snapshot.jpg")
+#         response = requests.get(url, timeout=10)
+#         response.raise_for_status()
+#         with open(path, "wb") as f:
+#             f.write(response.content)
+#         logger.debug("Captured %s", path)
+
+    def _capture_images(self):
+        for cam, name in zip(self.cams, self.cam_names):
+            path = self.out_dir / name / f"frame_{self._frame_index:06d}.jpg"
+
+            with cam.captured_request() as request:
+                request.save("main", str(path))
+                logger.debug("Captured %s", path.name)
+            # request = cam.capture_request()
+            # try:
+            #     request.save("main", str(path))
+            #     logger.debug("Captured %s", path.name)
+            # finally:
+            #     request.release()
+            #     logger.debug("Released cam")
+
 
     async def capture_loop(self):
         """
@@ -116,9 +215,8 @@ class AutoImager:
                 # printer is not printing or similar
                 continue
             self._frame_index += 1
-            path = self.out_dir / f"frame_{self._frame_index:06d}.jpg"
             # Since picamera is blocking, it must be offloaded
-            await asyncio.to_thread(self._capture_image, path)
+            await asyncio.to_thread(self._capture_images)
             self.websocket_disconnect_count = 0
 
     async def subscribe(self, ws):
@@ -182,7 +280,7 @@ class AutoImager:
                 if "state" in stats:
                     printer_state = stats["state"]
                 if "info" in stats:
-                    self.current_layer = stats["info"]["current_layer"]
+                    self.current_layer = stats["info"]["current_layer"] or 0
                     self.total_layer = stats["info"]["total_layer"]
 
             # elif msg.get("method") == "notify_proc_stat_update":
@@ -259,6 +357,10 @@ class AutoImager:
                 await asyncio.sleep(wait)
                 delay = min(delay * 2, 30)
 
+    def stop_cams(self):
+        for cam in self.cams:
+            cam.stop()
+
 
 async def _run(cfg):
     cfg = parsing_utils.get_config()
@@ -272,7 +374,7 @@ async def _run(cfg):
             # captures images
             tg.create_task(ai.capture_loop())
     finally:
-        ai.picam2.stop()
+        ai.stop_cams()
 
 
 def run():
