@@ -52,50 +52,45 @@ class AutoImager:
     def register_cameras(self):
         picamera_info = Picamera2.global_camera_info()
         logger.info("Available cameras: %s", picamera_info)
-        picams = []
-        usbcams = []
-        registered_devices = []
-        for available_cam in picamera_info:
-            for configured_cam in self.cfg.cam:
-                if available_cam["Id"] == configured_cam["device"] and configured_cam["device"] not in registered_devices:
-                    if configured_cam["type"] == "rpi":
-                        picams.append(available_cam)
-                        registered_devices.append(configured_cam["device"])
-                    elif configured_cam["type"] == "usb":
-                        usbcams.append(available_cam)
-                        registered_devices.append(configured_cam["device"])
-
-        logger.info("Will capture images from the following raspberry pi (++) cameras: %s", picams)
-        logger.info("Will capture images from the following usb cameras: %s", usbcams)
-
-        self.cams = [] 
+        self.cams = []
         self.cam_names = []
+        registered_devices = []
+         
+        # for available_cam in picamera_info:
+        for ix, available_cam in enumerate(picamera_info):
+            for configured_cam in self.cfg.cam:
+                if (available_cam["Id"] == configured_cam["device"]) and (configured_cam["device"] not in registered_devices):
+                    if configured_cam["type"] == "rpi":
+                        # new_cam = Picamera2(available_cam["Num"])
+                        new_cam = Picamera2(ix)
+                        logger.info("Available sensor modes for camera %s: %s", available_cam["Model"], new_cam.sensor_modes)
+                        cfg = new_cam.create_still_configuration(
+                            # controls=self.cfg.controls
+                        )
+                        new_cam.configure(cfg)
+                        new_cam.start()
+                        logger.info("Registered the following configuration for %s: %s", available_cam["Model"], new_cam.camera_configuration())
+                        self.cams.append(new_cam)
+                        self.cam_names.append(available_cam["Model"])
+                        registered_devices.append(configured_cam["device"])
 
-        for cam in picams:
-            picam_idx = cam["Num"]
-            new_cam = Picamera2(picam_idx)
-            logger.info("Available sensor modes for camera %s: %s", cam["Model"], new_cam.sensor_modes)
-            cfg = new_cam.create_still_configuration(
-                # controls=self.cfg.controls
-            )
-            new_cam.configure(cfg)
-            logger.info("Registered the following configuration for %s: %s", cam["Model"], new_cam.camera_configuration())
-            self.cams.append(new_cam)
-            self.cam_names.append(cam["Model"])
-        for cam in usbcams:
-            picam_idx = cam["Num"]
-            new_cam = Picamera2(picam_idx)
-            logger.info("Available sensor modes for camera %s: %s", cam["Model"], new_cam.sensor_modes)
-            cfg = new_cam.create_still_configuration(
-                # controls=cfg.controls
-            )
-            new_cam.configure(cfg)
-            logger.info("Registered the following configuration for %s: %s", cam["Model"], new_cam.camera_configuration())
-            self.cams.append(new_cam)
-            self.cam_names.append(cam["Model"])
+                    elif configured_cam["type"] == "usb":
+                        # new_cam = Picamera2(available_cam["Num"])
+                        new_cam = Picamera2(ix)
+                        logger.info("Available sensor modes for camera %s: %s", available_cam["Model"], new_cam.sensor_modes)
+                        cfg = new_cam.create_still_configuration(
+                            # controls=self.cfg.controls
+                        )
+                        new_cam.configure(cfg)
+                        new_cam.start()
+                        logger.info("Registered the following configuration for %s: %s", available_cam["Model"], new_cam.camera_configuration())
+                        self.cams.append(new_cam)
+                        self.cam_names.append(available_cam["Model"])
+                        registered_devices.append(configured_cam["device"])
 
-        for cam in self.cams:
-            cam.start()
+        logger.info("Will capture images from the following cameras:")
+        for cam, name in zip(self.cams, self.cam_names):
+            logger.info("%s (%s)", cam, name)
 
         # The code in this function could be made simpler if we dont need to distinguish between usb and picams
 
