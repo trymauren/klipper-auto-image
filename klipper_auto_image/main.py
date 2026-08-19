@@ -44,18 +44,18 @@ class AutoImager:
         self.current_layer = 0
         self.total_layer = 0
         self._frame_index = 0 
+        self.cams = []
+        self.cam_names = []
         self.metadata_saved = True
         self.out_dir = self.cfg.output_dir
         self.register_cameras() 
     
     def register_cameras(self):
-        self.cams = ["http://127.0.0.1:8001/snapshot", "http://127.0.0.1:8002/snapshot", "http://127.0.0.1:8003/snapshot"]
-        self.cam_names = ["nozzle", "corner", "shitty"]
-
         logger.info("Will capture images from the following cameras:")
-        for cam, name in zip(self.cams, self.cam_names):
-            logger.info("%s (%s)", cam, name)
-
+        for requested_cam in self.cfg.cam:
+            self.cams.append(requested_cam["uri"])
+            self.cam_names.append(requested_cam["name"])
+            logger.info("%s (%s)", requested_cam["uri"], requested_cam["name"])
     
     # def register_cameras(self):
     #     picamera_info = Picamera2.global_camera_info()
@@ -355,16 +355,13 @@ class AutoImager:
 async def _run(cfg):
     cfg = parsing_utils.get_config()
     ai = AutoImager(cfg)
-    try:
-        async with asyncio.TaskGroup() as tg:
-            # connects to websocket and subscribes to printer state
-            tg.create_task(
-                ai.connect_with_backoff(cfg.ws_uri)
-            )
-            # captures images
-            tg.create_task(ai.capture_loop())
-    finally:
-        ai.stop_cams()
+    async with asyncio.TaskGroup() as tg:
+        # connects to websocket and subscribes to printer state
+        tg.create_task(
+            ai.connect_with_backoff(cfg.ws_uri)
+        )
+        # captures images
+        tg.create_task(ai.capture_loop())
 
 
 def run():
