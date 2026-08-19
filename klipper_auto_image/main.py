@@ -350,11 +350,6 @@ class AutoImager:
                 await asyncio.sleep(wait)
                 delay = min(delay * 2, 30)
 
-    def stop_cams(self):
-        pass
-        for cam in self.cams:
-            cam.stop()
-
 
 
 async def _run(cfg):
