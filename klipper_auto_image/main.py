@@ -57,7 +57,7 @@ class AutoImager:
             logger.info("%s (%s)", requested_cam["uri"], requested_cam["name"])
     
     def new_print_session(self):
-
+        logger.info("Preparing new print session")
         self.out_dir = self.cfg.output_dir / self.time_stamp 
         for name in self.cam_names:
             cam_dir = self.out_dir / name
@@ -70,13 +70,15 @@ class AutoImager:
         self.current_temperatures = defaultdict(list)
 
     def cleanup_after_print_session(self):
+        logger.info("Cleaning up after print session")
         self.post_printing_count = 0
         self.current_layer = 0
         self.total_layer = 0
         if self.current_temperatures:
-            file_path = self.out_dir / "sensor_data.yaml"
-            with open(file_path, 'w') as fp:
-                json.dump(self.current_temperatures, fp)
+            file_path = self.out_dir / "sensor_data.json"
+            with open(file_path, 'w', encoding='utf-8') as fp:
+                json.dump(self.current_temperatures, fp, ensure_ascii=False, indent=4)
+            logger.info("Wrote temperature data to %s", file_path)
 
     def update_printjob_state(self, new_state):
         if new_state == self.printjob_state:
@@ -95,12 +97,17 @@ class AutoImager:
     def record_temperatures(self, changed_stats, time_):
         if not self.should_shoot():
             return
-        for sensor_name, param in changed_stats.items():
-            if "temperature_sensor" in sensor_name:
-                val = param.get("temperature")
-                if val is not None:
-                    recording = {"value": val, "moonraker_time": time_,
-                                 "id": self.uuid_str, "time": self.time_stamp}
+        objects = ["temperature_sensor", "temperature_fan", "extruder", "heater_bed"]
+        for sensor_name, fields in changed_stats.items():
+            for obj in objects:
+                if obj in sensor_name:
+                    temp = fields.get("temperature")
+                    target = fields.get("target")
+                    power = fields.get("power")
+                    recording = {"temperature": temp, "target": target, "power": power, 
+                                 "moonraker_time": time_, "id": self.uuid_str,
+                                 "time": self.time_stamp}
+                    # logger.error("%s, %s", sensor_name, recording)
                     self.current_temperatures[sensor_name].append(recording)
 
     def should_shoot(self):
@@ -172,7 +179,7 @@ class AutoImager:
         if not self.klippy_state == "ready":
             logger.error("Monitor function was invoked before klippy state is ready")
             return
-             
+ 
         payload = {"jsonrpc": "2.0", "method": "printer.objects.list", "id": 1454}
         available_objects = []
         await ws.send(json.dumps(payload)) 
@@ -182,8 +189,23 @@ class AutoImager:
                 # Check which objects are available
                 available_objects = msg["result"]["objects"]
                 break
-                
-        temperature_objects = {obj: None for obj in available_objects if "temperature_sensor" in obj}
+        logger.info("Available printer objects: %s", available_objects)        
+
+        temperature_objects = {}
+        for obj in available_objects:
+            if "temperature_sensor" in obj:
+                temperature_objects[obj] = None
+            if "temperature_fan" in obj:
+                temperature_objects[obj] = None
+            if "extruder" in obj:
+                temperature_objects[obj] = None
+            if "heater_bed" in obj:
+                temperature_objects[obj] = None
+
+        # temperature_objects = {obj: None for obj in available_objects if "temperature_sensor" in obj}
+
+        logger.info("Using the following objects %s", temperature_objects.keys())
+
         msg_id = 7000
         payload = {
             "jsonrpc": "2.0",
@@ -231,13 +253,14 @@ class AutoImager:
         }
         await ws.send(json.dumps(payload))
         msg = json.loads(await ws.recv())
-        logger.info("METADATA REQUEST MIGHT FAIL, MSG CONTENT: %s", msg)
+        # logger.info("METADATA REQUEST MIGHT FAIL, MSG CONTENT: %s", msg)
         metadata = msg.get('result').get('jobs')[0]
         logger.debug("Metadata: %s", metadata) 
         file_path = self.out_dir / f"metadata.json"
-        with open(file_path, 'w') as fp:
-            json.dump(metadata, fp)
+        with open(file_path, 'w', encoding='utf-8') as fp:
+            json.dump(metadata, fp, ensure_ascii=False, indent=4)
         self.metadata_saved = True
+        logger.info("Saved metadata to %s", file_path)
  
     def update_layer_stats(self, stats):
         self.current_layer = stats["info"]["current_layer"] or 0
