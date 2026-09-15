@@ -1,7 +1,7 @@
 [Unit]
 Description=Always-on semi-standalone image capture
 Documentation=https://github.com/trymauren/klipper-auto-image
-After=udev.service network-online.target
+After=udev.service crowsnest.service network-online.target
 
 [Service]
 Type=simple

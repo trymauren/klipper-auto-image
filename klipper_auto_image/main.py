@@ -4,52 +4,51 @@ import json
 import logging
 import time
 from pathlib import Path
-
+import uuid
 import websockets
-
+from collections import defaultdict
 from klipper_auto_image import custom_logger as logger
 from klipper_auto_image import parsing_utils
+from datetime import datetime
 
 import requests
 from PIL import Image
 from io import BytesIO
 
-"""
-From docs:
+CHECK_MOONRAKER_LOG = "Moonraker might not be running. If this error persists, check the Moonraker logs."
+UNKNOWN_MSG = "Unknown message in the websocket response!"
+SUCCESSFUL_SUBSCRIPTION = "Successfully subscribed to printer state event"
+RE_SUBSCRIBE_MOONRAKER = "Resubscribing to Moonraker printer status caused by an unregistered Moonraker restart"
 
-The configuration of Picamera2 therefore divides into:
-    
-    • General parameters that apply globally to the Picamera2 system and across the whole of the ISP.
 
-    • And per-stream configuration within the ISP that determines the output formats and sizes of the main and lores streams.
-        We note that the main stream is always defined and delivered to the application, using default values if the application did
-        not explicitly request one.
-
-    • Some applications need to be able to control the mode (resolution, bit depth and so on) that the sensor is running in. This
-        can be done using the sensor part of the camera configuration or, if this is absent, it will be inferred from the specification
-        of the raw stream (if present).
-
-    • Mostly, a configuration does not include camera settings that can be changed at runtime (such as brightness or contrast).
-        However, certain use cases do sometimes have particular preferences about certain of these control values, and they can
-        be stored as part of a configuration so that applying the configuration will apply the runtime controls automatically too.
-
-"""
 class AutoImager:
     def __init__(self, cfg):
         self.cfg = cfg
-        self.printer_state = "websocket_disconnected" # not a Moonraker response value
+        self.printjob_state = "websocket_disconnected" # not a Moonraker response value
         self.klippy_state = "klippy_disconnected" # not a Moonraker response value
         self.websocket_disconnect_count = 0
-        self.print_finished_count = 0
+        self.post_printing_count = 0
         self.current_layer = 0
         self.total_layer = 0
         self._frame_index = 0 
+        self.moonraker_time = 999999999
+        self.print_session_id = uuid.uuid4()
         self.cams = []
         self.cam_names = []
+        self.current_temperatures = defaultdict(list)
         self.metadata_saved = True
         self.out_dir = self.cfg.output_dir
-        self.register_cameras() 
+        self.register_cameras()
+
     
+    @property
+    def uuid_str(self):
+        return str(self.print_session_id)
+
+    @property
+    def time_stamp(self):
+        return datetime.now().strftime("%Y%m%d-%H%M%S")
+
     def register_cameras(self):
         logger.info("Will capture images from the following cameras:")
         for requested_cam in self.cfg.cam:
@@ -57,138 +56,85 @@ class AutoImager:
             self.cam_names.append(requested_cam["name"])
             logger.info("%s (%s)", requested_cam["uri"], requested_cam["name"])
     
-    # def register_cameras(self):
-    #     picamera_info = Picamera2.global_camera_info()
-    #     logger.info("Available cameras: %s", picamera_info)
-    #     self.cams = []
-    #     self.cam_names = []
-    #     registered_devices = []
-    #
-    #     # for available_cam in picamera_info:
-    #     for ix, available_cam in enumerate(picamera_info):
-    #         for configured_cam in self.cfg.cam:
-    #             if (available_cam["Id"] == configured_cam["device"]) and (configured_cam["device"] not in registered_devices):
-    #                 if configured_cam["type"] == "rpi":
-    #                     # new_cam = Picamera2(available_cam["Num"])
-    #                     new_cam = Picamera2(ix)
-    #                     logger.info("Available sensor modes for camera %s: %s", available_cam["Model"], new_cam.sensor_modes)
-    #                     cfg = new_cam.create_still_configuration(
-    #                         # controls=self.cfg.controls
-    #                     )
-    #                     new_cam.configure(cfg)
-    #                     new_cam.start()
-    #                     logger.info("Registered the following configuration for %s: %s", available_cam["Model"], new_cam.camera_configuration())
-    #                     self.cams.append(new_cam)
-    #                     self.cam_names.append(available_cam["Model"])
-    #                     registered_devices.append(configured_cam["device"])
-    #
-    #                 elif configured_cam["type"] == "usb":
-    #                     # new_cam = Picamera2(available_cam["Num"])
-    #                     new_cam = Picamera2(ix)
-    #                     logger.info("Available sensor modes for camera %s: %s", available_cam["Model"], new_cam.sensor_modes)
-    #                     cfg = new_cam.create_still_configuration(
-    #                         # controls=self.cfg.controls
-    #                     )
-    #                     new_cam.configure(cfg)
-    #                     new_cam.start()
-    #                     logger.info("Registered the following configuration for %s: %s", available_cam["Model"], new_cam.camera_configuration())
-    #                     self.cams.append(new_cam)
-    #                     self.cam_names.append(available_cam["Model"])
-    #                     registered_devices.append(configured_cam["device"])
-    #
-    #     logger.info("Will capture images from the following cameras:")
-    #     for cam, name in zip(self.cams, self.cam_names):
-    #         logger.info("%s (%s)", cam, name)
-    #
-    #     # The code in this function could be made simpler if we dont need to distinguish between usb and picams
-
-    
     def new_print_session(self):
-        self.out_dir = self.cfg.output_dir / time.strftime("%Y%m%d-%H%M%S")
+
+        self.out_dir = self.cfg.output_dir / self.time_stamp 
         for name in self.cam_names:
             cam_dir = self.out_dir / name
             cam_dir.mkdir(parents=True, exist_ok=True)
             logger.debug("Created directory %s", cam_dir)
         self._frame_index = 0
+        self.print_session_id = uuid.uuid4()
         self.metadata_saved = False
+        self.post_printing_count = 0
+        self.current_temperatures = defaultdict(list)
 
-    def update_printer_state(self, new_state):
-        if new_state == self.printer_state:
+    def cleanup_after_print_session(self):
+        self.post_printing_count = 0
+        self.current_layer = 0
+        self.total_layer = 0
+        if self.current_temperatures:
+            file_path = self.out_dir / "sensor_data.yaml"
+            with open(file_path, 'w') as fp:
+                json.dump(self.current_temperatures, fp)
+
+    def update_printjob_state(self, new_state):
+        if new_state == self.printjob_state:
             return
 
-        old_state = self.printer_state
+        old_state = self.printjob_state
         
         if new_state == "printing" and old_state != "printing":
             self.new_print_session()
-        
-        elif new_state in ["cancelled", "error", "complete"] and old_state == "printing":
-            new_state = "after_printing" 
  
-        self.printer_state = new_state
+        elif new_state in ["cancelled", "error", "complete"] and old_state == "printing":
+            self.post_printing_count = 1
+        
+        self.printjob_state = new_state
+
+    def record_temperatures(self, changed_stats, time_):
+        if not self.should_shoot():
+            return
+        for sensor_name, param in changed_stats.items():
+            if "temperature_sensor" in sensor_name:
+                val = param.get("temperature")
+                if val is not None:
+                    recording = {"value": val, "moonraker_time": time_,
+                                 "id": self.uuid_str, "time": self.time_stamp}
+                    self.current_temperatures[sensor_name].append(recording)
 
     def should_shoot(self):
         """
-        Currently returns True only if the printer is actually printing
+        Currently returns True if the printer is printing layer [1, ... n] or
+        if the printer has just finished printing
         """
+        
         if self.klippy_state == "ready":
-            if self.printer_state == "printing" and self.current_layer is not None:
+            if (self.printjob_state == "printing") and (self.current_layer > 0):
                 return True
-            elif self.printer_state == "after_printing":
-                if self.print_finished_count < 5:
-                    self.print_finished_count += 1
-                    return True
-                else:
-                    self.update_printer_state("finished_capturing_after")
-                    self.print_finished_count = 0
-                    self.current_layer = 0
-                    self.total_layer = 0
+
+        elif self.klippy_state in ["error", "shutdown", "startup", "disconnected"]:
             return False
 
-        elif self.printer_state in [
-            "standby",
-            "paused",
-            "error",
-            "cancelled",
-            "complete",
-            "websocket_disconnected",
-        ] or self.klippy_state in ["error", "shutdown", "startup", "disconnected"]:
+        elif self.klippy_state == "klippy_disconnected":
+            logger.info("Session not yet established. Waiting for connection.")
             return False
-        else:
-            logger.warning("Printer status is unknown")
-            return False
+
+        if self.post_printing_count:
+            if self.post_printing_count > 5:
+                self.cleanup_after_print_session()
+                return False
+            return True
+
+        return False
 
     def _capture_images(self):
-        # url = "http://localhost:8080/webcam/?action=snapshot"
-
         for cam, name in zip(self.cams, self.cam_names):
-            path = self.out_dir / name / f"frame_{self._frame_index:06d}.jpg"
-            # spyglass default url:
-            # url = "http://localhost:8001/snapshot"
+            path = self.out_dir / name / f"frame_{self._frame_index:06d}_moonraker_time_{self.moonraker_time}_id_{self.uuid_str}_time_{self.time_stamp}.jpg"
             response = requests.get(cam, timeout=10)
-            # response = requests.get(url, timeout=10)
             img = Image.open(BytesIO(response.content))
             img.save(path)
-            # response = requests.get(url, timeout=10)
-            # response.raise_for_status()
-            # with open(path, "wb") as f:
-            #     f.write(response.content)
             logger.debug("Captured %s", path)
-    #
-    # def _capture_images(self):
-    #     for cam, name in zip(self.cams, self.cam_names):
-    #         path = self.out_dir / name / f"frame_{self._frame_index:06d}.jpg"
-    #
-    #         with cam.captured_request() as request:
-    #             request.save("main", str(path))
-    #             logger.debug("Captured %s", path.name)
-    #         # request = cam.capture_request()
-    #         # try:
-    #         #     request.save("main", str(path))
-    #         #     logger.debug("Captured %s", path.name)
-    #         # finally:
-    #         #     request.release()
-    #         #     logger.debug("Released cam")
-
 
     async def capture_loop(self):
         """
@@ -200,135 +146,161 @@ class AutoImager:
         while True:
 
             next_shot += 1 / self.cfg.fps
-
             await asyncio.sleep(max(0.0, next_shot - time.monotonic()))
+            self._frame_index += 1
 
             if not self.should_shoot():
-                self.websocket_disconnect_count += int(self.printer_state == "websocket_disconnected")                          
-                # printer is not printing or similar
+                disconnected = int(self.printjob_state == "websocket_disconnected")
+                self.websocket_disconnect_count += disconnected
                 continue
-            self._frame_index += 1
-            # Since picamera is blocking, it must be offloaded
+            
             await asyncio.to_thread(self._capture_images)
             self.websocket_disconnect_count = 0
 
-    async def subscribe(self, ws):
+            if self.post_printing_count:
+                # Now in post-printing mode, capturing some frames also after printer is finished/stopped
+                self.post_printing_count += 1
+
+    async def subscribe_and_monitor(self, ws):
         """
-        Subscribes to Moonraker printer status updates and updates self.printer_state
+        Subscribes to Moonraker printer status updates and updates self.printjob_state
         """
+
+        # MOVE THE AVAILABLE OBJECTS QUERY TO AFTER KLIPPER (KLIPPY?) IS READY
+        # https://moonraker.readthedocs.io/en/latest/printer_objects/
+
+        if not self.klippy_state == "ready":
+            logger.error("Monitor function was invoked before klippy state is ready")
+            return
+             
+        payload = {"jsonrpc": "2.0", "method": "printer.objects.list", "id": 1454}
+        available_objects = []
+        await ws.send(json.dumps(payload)) 
+        while True:
+            msg = json.loads(await ws.recv()) 
+            if (msg.get("id") == 1454) and (msg.get("result") is not None):
+                # Check which objects are available
+                available_objects = msg["result"]["objects"]
+                break
+                
+        temperature_objects = {obj: None for obj in available_objects if "temperature_sensor" in obj}
         msg_id = 7000
         payload = {
             "jsonrpc": "2.0",
             "method": "printer.objects.subscribe",
-            "params": {"objects": {"print_stats": ["state", "info"]}},
+            "params": {"objects": {"print_stats": ["state", "info"], **temperature_objects}},
             "id": msg_id,
         }
         while True:
             await ws.send(json.dumps(payload))
             await self.monitor_printer(ws, msg_id)
- 
+
     
-    async def monitor_printer(self, ws, msg_id):
-
-        while self.websocket_disconnect_count < 10:
-            msg = json.loads(await ws.recv())
-
-            printer_state = self.printer_state
-            
-            if not self.metadata_saved: 
-                payload = {
-                    "jsonrpc": "2.0",
-                    "method": "server.history.list",
-                    "params":{
-                        "limit": 1,
-                        "order": "desc"
-                    },
-                    "id": 5656
-                }
-                await ws.send(json.dumps(payload))
-                msg = json.loads(await ws.recv())
-                metadata = msg.get('result').get('jobs')[0]
-                logger.debug("Metadata: %s", metadata) 
-                file_path = self.out_dir / f"metadata.json"
-                with open(file_path, 'w') as fp:
-                    json.dump(metadata, fp)
-                self.metadata_saved = True
-
-            if msg.get("id") == msg_id:
-                if msg.get("result") is not None:
-                    printer_state = msg["result"]["status"]["print_stats"]["state"]
-                    logger.debug("Reply: %s", printer_state)
-                    logger.info("Successfully subscribed to printer state event")
-                else:
-                    if msg.get("error") is not None:
-                        logger.warning("Moonraker might not be running. If this error persists, check the Moonraker logs.")
-                        continue
-                    else:
-                        logger.error("Unknown message in the websocket response!")
-
-            elif msg.get("method") == "notify_status_update":
-                changed = msg["params"][0]  # first in params are the changed fields
-                logger.info("Update: %s", changed)
-                stats = changed.get("print_stats", {})
-                if "state" in stats:
-                    printer_state = stats["state"]
-                if "info" in stats:
-                    self.current_layer = stats["info"]["current_layer"] or 0
-                    self.total_layer = stats["info"]["total_layer"]
-
-            # elif msg.get("method") == "notify_proc_stat_update":
-            #     logger.debug(msg)
-            #
-            # elif msg.get("method") == "notify_gcode_response":
-            #     logger.debug(msg)
-
-            else:
-                logger.debug("Other: %s", msg.get("method"))
-            
-            self.update_printer_state(printer_state)
-
-            while True:
-                if await self.klippy_ready(ws):
-                    break
-                await asyncio.sleep(1)
-
-            logger.debug("Printer state: %s", self.printer_state)
-        logger.info("Resubscribing to Moonraker printer status caused by an unregistered Moonraker restart")
-        self.websocket_disconnect_count = 0
-
-    async def klippy_ready(self, ws):
-        msg_id = 9000
+    async def check_klippy_ready(self, ws):
+        """
+        Check if Moonraker is connected to Klippy and that
+        Klippy is ready
+        """
+        msg_id = 9546
         payload = {
             "jsonrpc": "2.0",
             "method": "server.info",
             "id": msg_id,
         }
-        await ws.send(json.dumps(payload))
         while True:
-            msg = json.loads(await ws.recv()) 
-            if msg.get("id") == msg_id:
-                klippy_state = msg["result"]["klippy_state"]
+            await ws.send(json.dumps(payload))
+            while True:
+                msg = json.loads(await ws.recv()) 
+                if msg.get("id") == msg_id:
+                    result = msg["result"]
+                    klippy_state = result["klippy_state"]
+                    klippy_connected = result["klippy_connected"]
+                    if klippy_state == "ready" and klippy_connected:
+                        self.klippy_state = "ready"
+                        return 
 
-                if klippy_state == "ready":
-                    ready = True
-                    if self.klippy_state != klippy_state:
-                        logger.info("Klippy state: %s", klippy_state)
-                    else:
-                        logger.debug("Klippy state: %s", klippy_state)
+    async def request_metadata(self, ws):
+        payload = {
+            "jsonrpc": "2.0",
+            "method": "server.history.list",
+            "params":{
+                "limit": 1,
+                "order": "desc"
+            },
+            "id": 5656
+        }
+        await ws.send(json.dumps(payload))
+        msg = json.loads(await ws.recv())
+        logger.info("METADATA REQUEST MIGHT FAIL, MSG CONTENT: %s", msg)
+        metadata = msg.get('result').get('jobs')[0]
+        logger.debug("Metadata: %s", metadata) 
+        file_path = self.out_dir / f"metadata.json"
+        with open(file_path, 'w') as fp:
+            json.dump(metadata, fp)
+        self.metadata_saved = True
+ 
+    def update_layer_stats(self, stats):
+        self.current_layer = stats["info"]["current_layer"] or 0
+        self.total_layer = stats["info"]["total_layer"]
 
-                elif klippy_state in ["error", "shutdown", "disconnected", "startup"]:
-                    ready = False
-                    if self.klippy_state != klippy_state:
-                        logger.warning("Klippy state: %s", klippy_state)
-                    else:
-                        logger.debug("Klippy state: %s", klippy_state)
+    async def monitor_printer(self, ws, subscription_msg_id):
 
+        while self.websocket_disconnect_count < 10:
+            msg = json.loads(await ws.recv())
+        
+            printjob_state = self.printjob_state
+            
+            if not self.metadata_saved: 
+                await self.request_metadata(ws)
+
+            if msg.get("id") == subscription_msg_id:
+                result = msg.get("result") 
+                if result is not None:
+                    printjob_state = result["status"]["print_stats"]["state"]
+                    logger.debug("Reply: %s", printjob_state)
+                    logger.info(SUCCESSFUL_SUBSCRIPTION)
+                elif msg.get("error") is not None:
+                    logger.warning(CHECK_MOONRAKER_LOG)
+                    continue
                 else:
-                    logger.error("Unknown Klippy state: %s", klippy_state)
-                
-                self.klippy_state = klippy_state
-                return ready
-    
+                    logger.error(UNKNOWN_MSG)
+
+            elif msg.get("method") == "notify_status_update":
+                changed = msg["params"][0]  # first in params are the changed fields
+                time_ = msg["params"][1] # the time is relative to the monotonic clock used by Klipper
+                self.moonraker_time = time_
+                self.record_temperatures(changed, time_)
+                stats = changed.get("print_stats", {})
+                if "state" in stats:
+                    printjob_state = stats["state"]
+                if "info" in stats:
+                    self.update_layer_stats(stats)
+            
+            elif msg.get("method") == "notify_klippy_shutdown":
+                self.klippy_state = "shutdown"
+                printjob_state = "shutdown"
+                logger.info("Klippy state: %s", self.klippy_state)
+
+            elif msg.get("method") == "notify_klippy_disconnected":
+                self.klippy_state = "disconnected"
+                printjob_state = "error"
+                logger.info("Klippy state: %s", self.klippy_state)
+
+            elif msg.get("method") == "notify_klippy_ready":
+                self.klippy_state = "ready"
+                printjob_state = "standby"
+                logger.info("Klippy state: %s", self.klippy_state)
+
+            else:
+                logger.debug("Other: %s", msg.get("method"))
+            
+
+            self.update_printjob_state(printjob_state)
+
+            logger.debug("Printjob state: %s", self.printjob_state)
+
+        logger.info(RE_SUBSCRIBE_MOONRAKER)
+        self.websocket_disconnect_count = 0    
 
     async def connect_with_backoff(self, uri):
         """
@@ -340,16 +312,15 @@ class AutoImager:
             try:
                 async with websockets.connect(uri) as ws:
                     delay = 1
-                    await self.klippy_ready(ws)
-                    await self.subscribe(ws)
+                    await self.check_klippy_ready(ws)
+                    await self.subscribe_and_monitor(ws)
 
             except (websockets.ConnectionClosed, OSError) as e:
-                self.printer_state = "websocket_disconnected"
+                self.printjob_state = "websocket_disconnected"
                 wait = min(delay, 30)
                 logger.info(f"Disconnected ({e}), retry in {wait:.1f}s")
                 await asyncio.sleep(wait)
                 delay = min(delay * 2, 30)
-
 
 
 async def _run(cfg):
