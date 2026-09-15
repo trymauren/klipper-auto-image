@@ -19,7 +19,7 @@ max_fps: 10
 ```
 
 ```bash
-# ~/printer_data/config/crowsnest.conf
+# ~/printer_data/config/klipper-auto-image.conf
 [[cam]]
 name: somecoolname
 uri = "http://127.0.0.1:8001/snapshot"
