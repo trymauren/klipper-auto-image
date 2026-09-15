@@ -25,4 +25,4 @@ name: somecoolname
 uri = "http://127.0.0.1:8001/snapshot"
 ```
 
-The `[cam mycam]` sections in the crowsnest configuration file located at `~/printer_data/config/crowsnest.conf` should contain a `port` field. If `port: 8001`, then
+Note how the `port` field (8001) in the crowsnest configuration corresponds to the port in the configured klipper-auto-image URI.
