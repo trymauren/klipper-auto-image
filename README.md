@@ -5,7 +5,7 @@ Images are stored at the client machine (the machine running this software).
 
 To install, clone repo and run `make install` (in the repo root dir). This will configure the client to run as a daemon using systemd.
 
-To configure, edit `~/printer_data/config/klipper-auto-image.conf` and reboot the machine (or restart the service using systemctl).
+To configure, edit `~/printer_data/config/klipper-auto-image.conf`.
 
 **Example configuration with crowsnest running on the same machine as klipper-auto-image**
 ```bash
@@ -26,3 +26,20 @@ uri = "http://127.0.0.1:8001/snapshot"
 ```
 
 Note how the `port` field (8001) in the crowsnest configuration corresponds to the port in the configured klipper-auto-image URI.
+
+After changing configuration, the machine must be rebooted or the service must be restarted:
+
+```bash
+# to reboot
+sudo reboot
+
+# to restart service
+sudo systemctl restart klipper-auto-image
+```
+
+To check whether the service is running and grab the latest logged messages:
+
+```bash
+sudo systemctl status klipper-auto-image
+```
+
