@@ -139,10 +139,15 @@ class AutoImager:
         for cam, name in zip(self.cams, self.cam_names):
             path = self.out_dir / name / f"frame_{self._frame_index:06d}_moonraker_time_{self.moonraker_time}_id_{self.uuid_str}_time_{self.time_stamp}.jpg"
             try:
-                response = requests.get(cam, timeout=10)
+                response = requests.get(cam, timeout=5)
+                response.raise_for_status()
+                data = response.content
+                with Image.open(BytesIO(data)) as img:
+                    img.load()
+                    img.save(path)
 
             except requests.exceptions.ConnectionError:
-                logger.warning(
+                logger.debug(
                     "Camera %s is unavailable at %s",
                     name,
                     cam,
@@ -150,7 +155,7 @@ class AutoImager:
                 continue
 
             except requests.exceptions.Timeout:
-                logger.warning(
+                logger.debug(
                     "Timed out getting snapshot from camera %s (%s)",
                     name,
                     cam,
@@ -158,7 +163,7 @@ class AutoImager:
                 continue
 
             except requests.exceptions.HTTPError as exc:
-                logger.warning(
+                logger.debug(
                     "Camera %s (%s) returned HTTP %s",
                     name,
                     cam,
@@ -166,8 +171,6 @@ class AutoImager:
                 )
                 continue
 
-            img = Image.open(BytesIO(response.content))
-            img.save(path)
             logger.debug("Captured %s", path)
 
 
