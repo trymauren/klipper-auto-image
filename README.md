@@ -41,5 +41,16 @@ To check whether the service is running and grab the latest logged messages:
 
 ```bash
 sudo systemctl status klipper-auto-image
+
+# or
+
+sudo journalctl --since "10 minutes ago"
 ```
+
+While developing and making changes to code, the following commands can be used to reinstall the software to use the updated code:
+```bash
+sudo systemctl disable --now klipper-auto-image
+sudo systemctl enable --now klipper-auto-image
+```
+
 
