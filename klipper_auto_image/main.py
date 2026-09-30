@@ -145,9 +145,11 @@ class AutoImager:
                 with Image.open(BytesIO(data)) as img:
                     img.load()
                     img.save(path)
+            
+                logger.debug("Captured %s", path)
 
             except OSError:
-                logger.debug("Pillow error?") # improve this
+                logger.debug("Pillow failed when capturing from %s", cam)
 
             except requests.exceptions.ConnectionError:
                 logger.debug(
@@ -155,7 +157,6 @@ class AutoImager:
                     name,
                     cam,
                 )
-                continue
 
             except requests.exceptions.Timeout:
                 logger.debug(
@@ -163,7 +164,6 @@ class AutoImager:
                     name,
                     cam,
                 )
-                continue
 
             except requests.exceptions.HTTPError as exc:
                 logger.debug(
@@ -172,10 +172,6 @@ class AutoImager:
                     cam,
                     exc.response.status_code if exc.response is not None else "unknown",
                 )
-                continue
-
-            logger.debug("Captured %s", path)
-
 
     async def capture_loop(self):
         """
