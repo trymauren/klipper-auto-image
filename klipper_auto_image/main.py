@@ -146,6 +146,9 @@ class AutoImager:
                     img.load()
                     img.save(path)
 
+            except OSError:
+                logger.debug("Pillow error?") # improve this
+
             except requests.exceptions.ConnectionError:
                 logger.debug(
                     "Camera %s is unavailable at %s",
@@ -285,13 +288,20 @@ class AutoImager:
         await ws.send(json.dumps(payload))
         msg = json.loads(await ws.recv())
         # logger.info("METADATA REQUEST MIGHT FAIL, MSG CONTENT: %s", msg)
-        metadata = msg.get('result').get('jobs')[0]
-        logger.debug("Metadata: %s", metadata) 
-        file_path = self.out_dir / f"metadata.json"
-        with open(file_path, 'w', encoding='utf-8') as fp:
-            json.dump(metadata, fp, ensure_ascii=False, indent=4)
-        self.metadata_saved = True
-        logger.info("Saved metadata to %s", file_path)
+        # result = msg.get('result')
+        # if result is not None:
+        #     jobs = result.get('jobs')
+        #     if jobs is not None:
+        #         metadata = jobs[0]
+        jobs = msg.get("result", {}).get("jobs", [])
+        metadata = jobs[0] if jobs else None
+        if metadata is not None:
+            logger.debug("Metadata: %s", metadata) 
+            file_path = self.out_dir / f"metadata.json"
+            with open(file_path, 'w', encoding='utf-8') as fp:
+                json.dump(metadata, fp, ensure_ascii=False, indent=4)
+            self.metadata_saved = True
+            logger.info("Saved metadata to %s", file_path)
  
     def update_layer_stats(self, stats):
         self.current_layer = stats["info"]["current_layer"] or 0
