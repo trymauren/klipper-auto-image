@@ -15,6 +15,7 @@ def build_parser():
     p.add_argument("--cam", default={}, nargs="+", action="extend")
     p.add_argument("--fps", type=int, default=1)
     p.add_argument("--output_dir", type=Path, default=Path("/tmp"))
+    p.add_argument("--post_printing_time", type=int, default=10)
 
     # Logging verbose/debug
     p.add_argument(
