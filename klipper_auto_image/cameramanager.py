@@ -36,11 +36,11 @@ class CameraManager:
         while True:
             next_shot += 1 / self._fps
             await asyncio.sleep(max(0.0, next_shot - time.monotonic()))
-            self._frame_index += 1
 
             if ready():
                 # t = datetime.now(TZ).strftime("%Y%m%d-%H%M%S")
                 # logger.info("New image should be captured now: %s", t)
+                self._frame_index += 1
                 await asyncio.to_thread(self._capture_images)
 
     def _register_cameras(self, cams: list[dict]):
