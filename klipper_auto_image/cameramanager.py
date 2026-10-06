@@ -2,13 +2,14 @@ import asyncio
 import time
 from datetime import datetime
 from io import BytesIO
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import requests
 from PIL import Image
 
 from klipper_auto_image import custom_logger as logger
-from klipper_auto_image.utils import PrintSession
+from klipper_auto_image.utils import Frame, PrintSession
 
 TZ = ZoneInfo("Europe/Oslo")
 from collections.abc import Callable
@@ -20,6 +21,7 @@ class CameraManager:
         self._cam_names = []
         self._frame_index = 0
         self._fps = 1
+        self._frame_queue: asyncio.Queue[Frame] = asyncio.Queue(maxsize=10)
 
     def configure(self, print_session: PrintSession, cams: list[dict], fps: int):
         self._cams = []
@@ -30,6 +32,7 @@ class CameraManager:
         self._data_out_dir = print_session.data_out_dir
         self._register_cameras(cams)
         self._setup_directories()
+        self._frame_queue = asyncio.Queue(maxsize=10)
 
     async def run(self, ready: Callable[..., bool]):
         next_shot = time.monotonic()
@@ -41,7 +44,22 @@ class CameraManager:
             if ready():
                 # t = datetime.now(TZ).strftime("%Y%m%d-%H%M%S")
                 # logger.info("New image should be captured now: %s", t)
-                await asyncio.to_thread(self._capture_images)
+                images = await asyncio.to_thread(self._capture_images)
+                for image in images:
+                    img = Frame(
+                        self._uuid,
+                        datetime.now(TZ),
+                        image,
+                        Path("dummypath"),
+                    )
+                    await self._frame_queue.put(img)
+                    logger.debug("Put new frame in queue")
+
+    async def next_frame(self):
+        logger.info("Called next_frame")
+        frame = await self._frame_queue.get()
+        logger.info("Fetched new frame")
+        return frame
 
     def _register_cameras(self, cams: list[dict]):
         logger.info("Will capture images from the following cameras:")
@@ -57,6 +75,7 @@ class CameraManager:
             logger.debug("Created directory %s", cam_dir)
 
     def _capture_images(self):
+        images = {}
         for cam, name in zip(self._cams, self._cam_names):
             t = datetime.now(TZ).strftime("%Y%m%d-%H%M%S")
             path = (
@@ -71,6 +90,7 @@ class CameraManager:
                 with Image.open(BytesIO(data)) as img:
                     img.load()
                     img.save(path)
+                    images[name] = img
 
                 logger.debug("Captured %s", path)
 
@@ -98,3 +118,4 @@ class CameraManager:
                     cam,
                     exc.response.status_code if exc.response is not None else "unknown",
                 )
+        return images

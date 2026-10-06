@@ -1,4 +1,5 @@
 # import asyncio
+import asyncio
 import json
 
 # from collections import defaultdict
@@ -12,9 +13,11 @@ import anyio
 from klipper_auto_image import custom_logger as logger
 from klipper_auto_image.cameramanager import CameraManager
 from klipper_auto_image.datacapturemanager import DataCaptureManager
+from klipper_auto_image.defectdetection import DefectDetector
 from klipper_auto_image.moonrakerconnector import MoonrakerConnector
 from klipper_auto_image.statemachine import PrinterStateMachine
 from klipper_auto_image.utils import (
+    FrameDetection,
     MoonrakerConnected,
     # PrinterStateUpdate,
     PrintJobStateUpdate,
@@ -36,12 +39,14 @@ class Controller:
         data_capture_manager: DataCaptureManager,
         moonraker_connector: MoonrakerConnector,
         camera_manager: CameraManager,
+        defect_detector: DefectDetector,
         cfg,
     ):
         self._data_capture_manager = data_capture_manager
         self._printer_state_machine = printer_state_machine
         self._moonraker_connector = moonraker_connector
         self._camera_manager = camera_manager
+        self._defect_detector = defect_detector
         self._cfg = cfg
         # self._print_session: PrintSession
         self._print_session = PrintSession(
@@ -59,6 +64,12 @@ class Controller:
         return self._print_session.print_session_id
 
     async def run(self):
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(self._moonraker_connector_loop())
+            tg.create_task(self._frame_transfer_loop())
+            tg.create_task(self._read_detections_loop())
+
+    async def _moonraker_connector_loop(self):
         while True:
             await self._moonraker_connector.wait_until_connected()
             try:
@@ -91,6 +102,20 @@ class Controller:
                 elif isinstance(msg, SubscriptionUpdate):
                     actions = await self._handle_subscription_msg(msg)
                     await self._handle_actions(actions)
+
+    async def _frame_transfer_loop(self):
+        while True:
+            frame = await self._camera_manager.next_frame()
+            logger.info("Got new frame")
+            await self._defect_detector.push_frame(frame)
+            logger.info("Pushed frame")
+
+    async def _read_detections_loop(self):
+        while True:
+            detection = await self._defect_detector.next_detection()
+            logger.info("New detection!")
+            if isinstance(detection, FrameDetection):
+                continue
 
     async def _handle_subscription_msg(self, msg: SubscriptionUpdate):
         # logger.debug("New subscription msg: %s", msg)
