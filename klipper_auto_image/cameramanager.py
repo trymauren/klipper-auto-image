@@ -32,7 +32,7 @@ class CameraManager:
         self._data_out_dir = print_session.data_out_dir
         self._register_cameras(cams)
         self._setup_directories()
-        self._frame_queue = asyncio.Queue(maxsize=10)
+        self._reset_frame_queue()
 
     async def run(self, ready: Callable[..., bool]):
         next_shot = time.monotonic()
@@ -45,20 +45,18 @@ class CameraManager:
                 # t = datetime.now(TZ).strftime("%Y%m%d-%H%M%S")
                 # logger.info("New image should be captured now: %s", t)
                 images = await asyncio.to_thread(self._capture_images)
-                for image in images:
+                for cam_name, image in images.items():
                     img = Frame(
                         self._uuid,
                         datetime.now(TZ),
                         image,
+                        cam_name,
                         Path("dummypath"),
                     )
                     await self._frame_queue.put(img)
-                    logger.debug("Put new frame in queue")
 
     async def next_frame(self):
-        logger.info("Called next_frame")
         frame = await self._frame_queue.get()
-        logger.info("Fetched new frame")
         return frame
 
     def _register_cameras(self, cams: list[dict]):
@@ -73,6 +71,13 @@ class CameraManager:
             cam_dir = self._data_out_dir / name
             cam_dir.mkdir(parents=True, exist_ok=True)
             logger.debug("Created directory %s", cam_dir)
+
+    def _reset_frame_queue(self):
+        while True:
+            try:
+                self._frame_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
 
     def _capture_images(self):
         images = {}

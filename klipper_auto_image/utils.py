@@ -117,19 +117,28 @@ class Frame:
     frame_id: UUID
     frame_timestamp: datetime
     image: np.ndarray
+    cam_name: str
     path: Path
+
+    def get_opencv_image(self):
+        return np.array(self.image)[:, :, ::-1].copy()
 
 
 @dataclass
 class FrameDetection:
+    frame_id: UUID
+    detection_id: UUID
+    frame_timestamp: datetime
+    detections_timestamp: datetime
+    detection_image: np.ndarray
+    cam_name: str
+    path: Path
+
+
+@dataclass
+class Detection:
     """Detection result"""
 
-    # frame_id: str
-    # detection_id: str
-    # frame_timestamp: float
-    # detections_timestamp: float
-    # detection_image: np.ndarray
-    # path: Path
     name: str
     confidence: float
     box: Box
@@ -137,19 +146,19 @@ class FrameDetection:
     @classmethod
     def from_tuple_list(
         cls, detections: list[tuple[str, float, tuple[float, float, float, float]]]
-    ) -> list[FrameDetection]:
-        return [FrameDetection.from_tuple(d) for d in detections]
+    ) -> list[Detection]:
+        return [Detection.from_tuple(d) for d in detections]
 
     @classmethod
     def from_tuple(
         cls, detection: tuple[str, float, tuple[float, float, float, float]]
-    ) -> FrameDetection:
+    ) -> Detection:
         box = Box.from_tuple(detection[2])
-        return FrameDetection(detection[0], float(detection[1]), box)
+        return Detection(detection[0], float(detection[1]), box)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> FrameDetection:
-        return FrameDetection(data["name"], data["confidence"], Box(**data["box"]))
+    def from_dict(cls, data: dict[str, Any]) -> Detection:
+        return Detection(data["name"], data["confidence"], Box(**data["box"]))
 
 
 @dataclass

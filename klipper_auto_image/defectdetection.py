@@ -1,10 +1,16 @@
 import asyncio
+from datetime import datetime
+from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import cv2 as opencv
 import numpy as np
 import onnxruntime
 
-from klipper_auto_image.utils import Frame, FrameDetection
+from klipper_auto_image.custom_logger import logger
+from klipper_auto_image.utils import Detection, Frame, FrameDetection
+
+TZ = ZoneInfo("Europe/Oslo")
 
 
 class DefectDetector:
@@ -14,14 +20,17 @@ class DefectDetector:
         self._cfg = {
             "providers": ["CUDAExecutionProvider", "CPUExecutionProvider"],
             "model_weights_path": "/home/pi/klipper-auto-image/weights/model-weights-5a6b1be1fa.onnx",
+            "thresh": 0.4,
+            "nms": 0.3,
         }
         self._prepare_model()
 
     async def run(self):
         while True:
             frame = await self._frames.get()
-            detection = await self._defect_detection(frame)
-            await self._detections.put(detection)
+            frame_with_detections = self._defect_detection(frame)
+            if frame_with_detections is not None:
+                await self._detections.put(frame_with_detections)
 
     async def push_frame(self, frame: Frame):
         await self._frames.put(frame)
@@ -38,7 +47,7 @@ class DefectDetector:
         )
 
     def _defect_detection(self, frame: Frame):
-        image = frame.image.copy()
+        image = frame.get_opencv_image()
         width = image.shape[1]
         height = image.shape[0]
 
@@ -54,12 +63,14 @@ class DefectDetector:
 
         input_name = self._onnx_session.get_inputs()[0].name
         outputs = self._onnx_session.run(None, {input_name: img_in})
-        thresh = 0.35
-        nms = 0.5
         detection_batch = self._post_processing(
-            outputs, width, height, thresh, nms, "g"
+            outputs, width, height, self._cfg["thresh"], self._cfg["nms"], "g"
         )
-        detections = FrameDetection.from_tuple_list(detection_batch[0])
+        detections = Detection.from_tuple_list(detection_batch[0])
+        if len(detections) == 0:
+            # logger.debug("No defects detected!")
+            return None
+
         for d in detections:
             opencv.rectangle(
                 image,
@@ -68,7 +79,17 @@ class DefectDetector:
                 (0, 255, 0),
                 2,
             )
-        return image
+
+        frame_with_detections = FrameDetection(
+            frame.frame_id,
+            uuid4(),
+            frame.frame_timestamp,
+            datetime.now(TZ),
+            image,
+            frame.cam_name,
+            frame.path,
+        )
+        return frame_with_detections
 
     def _post_processing(self, output, width, height, conf_thresh, nms_thresh, names):
         box_array = output[0]

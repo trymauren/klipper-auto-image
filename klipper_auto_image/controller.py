@@ -8,6 +8,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import anyio
+import cv2 as opencv
 
 # from pathlib import Path # anyio also has path
 from klipper_auto_image import custom_logger as logger
@@ -106,16 +107,25 @@ class Controller:
     async def _frame_transfer_loop(self):
         while True:
             frame = await self._camera_manager.next_frame()
-            logger.info("Got new frame")
             await self._defect_detector.push_frame(frame)
-            logger.info("Pushed frame")
 
     async def _read_detections_loop(self):
+
+        async def _write_detection_to_file(detection: FrameDetection):
+            file_dir = self._print_session.data_out_dir / "detections"
+            file_dir.mkdir(parents=True, exist_ok=True)
+            file_path = (
+                file_dir
+                / f"detection_by_{detection.cam_name}_uuid_{detection.detection_id}_time_{detection.detections_timestamp.strftime('%Y%m%d-%H%M%S')}.png"
+            )
+            await asyncio.to_thread(
+                opencv.imwrite, file_path, detection.detection_image
+            )
+
         while True:
             detection = await self._defect_detector.next_detection()
             logger.info("New detection!")
-            if isinstance(detection, FrameDetection):
-                continue
+            await _write_detection_to_file(detection)
 
     async def _handle_subscription_msg(self, msg: SubscriptionUpdate):
         # logger.debug("New subscription msg: %s", msg)
