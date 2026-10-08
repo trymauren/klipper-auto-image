@@ -9,6 +9,7 @@ name = "klipper-auto-image"
 version = "0.0.1"
 dependencies = [
     "anyio>=4.15.1",
+    "fastapi[standard]>=0.142.4",
     "onnxruntime>=1.30.0",
     "opencv-python>=5.0.0.93",
     "pillow>=12.3.0",

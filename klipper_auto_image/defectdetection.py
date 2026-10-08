@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 import cv2 as opencv
 import numpy as np
 import onnxruntime
+from PIL import Image
 
 from klipper_auto_image.custom_logger import logger
 from klipper_auto_image.utils import Detection, Frame, FrameDetection
@@ -24,13 +25,19 @@ class DefectDetector:
             "nms": 0.3,
         }
         self._prepare_model()
+        self._most_recent_image = None
 
     async def run(self):
         while True:
             frame = await self._frames.get()
             frame_with_detections = self._defect_detection(frame)
             if frame_with_detections is not None:
+                self._most_recent_image = Image.fromarray(
+                    frame_with_detections.detection_image
+                )
                 await self._detections.put(frame_with_detections)
+            else:
+                self._most_recent_image = frame.image
 
     async def push_frame(self, frame: Frame):
         await self._frames.put(frame)
@@ -38,6 +45,9 @@ class DefectDetector:
     async def next_detection(self):
         detection = await self._detections.get()
         return detection
+
+    def get_latest_image(self):
+        return self._most_recent_image
 
     def _prepare_model(self):
         providers = self._cfg["providers"]
