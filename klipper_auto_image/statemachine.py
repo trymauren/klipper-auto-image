@@ -65,13 +65,14 @@ class PrinterStateMachine:
 
         old_state = self.printjob_state
 
-        if new_state == "printing" and old_state != "printing":
+        if new_state == "printing" and old_state not in ["printing", "paused"]:
             action = StartPrintSession(session_id=uuid4(), started_at=datetime.now(TZ))
             actions.append(action)
 
-        elif (
-            new_state in ["cancelled", "error", "complete"] and old_state == "printing"
-        ):
+        elif new_state in ["cancelled", "error", "complete"] and old_state in [
+            "printing",
+            "paused",
+        ]:
             new_state = "post_printing"
             action = StartPostPrintSession(datetime.now(TZ))
             actions.append(action)
