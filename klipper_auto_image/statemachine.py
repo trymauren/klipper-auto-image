@@ -65,7 +65,15 @@ class PrinterStateMachine:
 
         old_state = self.printjob_state
 
-        if new_state == "printing" and old_state not in ["printing", "paused"]:
+        if old_state == "post_printing" and new_state != "data_capture_finished":
+            # Unless we are done post printing, post printing should continue even
+            # when the printjob state is notified as printing, paused, etc. The
+            # only time we should leave post printing, is when the controller
+            # notifies that we are done post printing using "data_capture_finished"
+            new_state = "post_printing"
+
+        elif new_state == "printing" and old_state not in ["printing", "paused"]:
+            # State change indicates that new printjob has been started
             action = StartPrintSession(session_id=uuid4(), started_at=datetime.now(TZ))
             actions.append(action)
 
@@ -73,6 +81,8 @@ class PrinterStateMachine:
             "printing",
             "paused",
         ]:
+            # State change indicates that we should now do some data capture after
+            # printjob is finished/cancelled/etc.
             new_state = "post_printing"
             action = StartPostPrintSession(datetime.now(TZ))
             actions.append(action)

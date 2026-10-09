@@ -1,9 +1,8 @@
 import argparse
 import logging
+import tomllib
 import urllib.parse
 from pathlib import Path
-
-import tomllib
 
 from klipper_auto_image import exceptions
 
@@ -12,7 +11,7 @@ def build_parser():
     p = argparse.ArgumentParser()
     p.add_argument("--config", type=Path, default=None)
     p.add_argument("--ws_uri", type=str, default=None)
-    p.add_argument("--cam", default={}, nargs="+", action="extend")
+    p.add_argument("--cam", default=list[dict], nargs="+", action="extend")
     p.add_argument("--fps", type=int, default=1)
     p.add_argument("--output_dir", type=Path, default=Path("/tmp"))
     p.add_argument("--post_printing_time", type=int, default=10)
@@ -56,7 +55,37 @@ def get_config(argv=None):
         # exit()
         parser.set_defaults(**cfg)
         args = parser.parse_args(argv)  # re-parse: config now backs the defaults
+    validate_config(args)
     return args
+
+
+def validate_config(args):
+    if not args.ws_uri:
+        raise exceptions.InvalidConfigError("Missing required config value: ws_uri")
+    check_ws_uri(args.ws_uri)
+
+    if args.fps <= 0:
+        raise exceptions.InvalidConfigError("fps must be greater than 0")
+
+    if not isinstance(args.cam, list) or not args.cam:
+        raise exceptions.InvalidConfigError(
+            "cam must be a non-empty list of camera configs with 'name' and 'uri'"
+        )
+    for cam in args.cam:
+        if not isinstance(cam, dict):
+            raise exceptions.InvalidConfigError(
+                "Each cam entry must be a dict with 'name' and 'uri'"
+            )
+        if not cam.get("name") or not cam.get("uri"):
+            raise exceptions.InvalidConfigError(
+                "Each cam entry must define non-empty 'name' and 'uri' values"
+            )
+    try:
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise exceptions.InvalidConfigError(
+            f"Unable to create output_dir '{args.output_dir}': {exc}"
+        ) from exc
 
 
 def check_ws_uri(websocket_uri):
@@ -70,7 +99,6 @@ def check_ws_uri(websocket_uri):
             result.port,
         ]
     ):
-        logging.debug("Urllib websocket uri parse result: %s", result)
         raise exceptions.InvalidConfigError(
             "Websocket URI has wrong format. Example: ws://0.0.0.0/80 or ws://localhost:8080/path."
         )

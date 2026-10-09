@@ -1,7 +1,11 @@
 import asyncio
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
+from pathlib import Path
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import requests
@@ -11,7 +15,15 @@ from klipper_auto_image import custom_logger as logger
 from klipper_auto_image.utils import PrintSession
 
 TZ = ZoneInfo("Europe/Oslo")
-from collections.abc import Callable
+
+
+@dataclass(frozen=True)
+class SnapshotArgs:
+    uuid: UUID
+    cams: tuple[str]
+    cam_names: tuple[str]
+    data_out_dir: Path
+    frame_index: int
 
 
 class CameraManager:
@@ -20,6 +32,7 @@ class CameraManager:
         self._cam_names = []
         self._frame_index = 0
         self._fps = 1
+        self._configured = False
 
     def configure(self, print_session: PrintSession, cams: list[dict], fps: int):
         self._cams = []
@@ -30,6 +43,7 @@ class CameraManager:
         self._data_out_dir = print_session.data_out_dir
         self._register_cameras(cams)
         self._setup_directories()
+        self._configured = True
 
     async def run(self, ready: Callable[..., bool]):
         next_shot = time.monotonic()
@@ -37,11 +51,21 @@ class CameraManager:
             next_shot += 1 / self._fps
             await asyncio.sleep(max(0.0, next_shot - time.monotonic()))
 
-            if ready():
+            if ready() and self._configured:
                 # t = datetime.now(TZ).strftime("%Y%m%d-%H%M%S")
                 # logger.info("New image should be captured now: %s", t)
                 self._frame_index += 1
-                await asyncio.to_thread(self._capture_images)
+
+                # In case self._capture_images() is still running in thread while
+                # configure() is called
+                snapshot_args = SnapshotArgs(
+                    self._uuid,
+                    tuple(self._cams),
+                    tuple(self._cam_names),
+                    self._data_out_dir,
+                    self._frame_index,
+                )
+                await asyncio.to_thread(self._capture_images, snapshot_args)
 
     def _register_cameras(self, cams: list[dict]):
         logger.info("Will capture images from the following cameras:")
@@ -56,14 +80,16 @@ class CameraManager:
             cam_dir.mkdir(parents=True, exist_ok=True)
             logger.debug("Created directory %s", cam_dir)
 
-    def _capture_images(self):
-        for cam, name in zip(self._cams, self._cam_names):
+    def _capture_images(self, snapshot_args: SnapshotArgs):
+        uuid = snapshot_args.uuid
+        cams = snapshot_args.cams
+        cam_names = snapshot_args.cam_names
+        frame_index = snapshot_args.frame_index
+        data_out_dir = snapshot_args.data_out_dir
+
+        for cam, name in zip(cams, cam_names):
             t = datetime.now(TZ).strftime("%Y%m%d-%H%M%S")
-            path = (
-                self._data_out_dir
-                / name
-                / f"frame_{self._frame_index}_id_{self._uuid}_time_{t}.jpg"
-            )
+            path = data_out_dir / name / f"frame_{frame_index}_id_{uuid}_time_{t}.jpg"
             try:
                 response = requests.get(cam, timeout=5)
                 response.raise_for_status()
@@ -73,9 +99,6 @@ class CameraManager:
                     img.save(path)
 
                 logger.debug("Captured %s", path)
-
-            # except OSError:
-            #     logger.debug("Pillow failed when capturing from %s", cam)
 
             except requests.exceptions.ConnectionError:
                 logger.debug(
@@ -98,3 +121,6 @@ class CameraManager:
                     cam,
                     exc.response.status_code if exc.response is not None else "unknown",
                 )
+
+            except OSError:
+                logger.debug("Pillow failed when capturing from %s", cam)

@@ -9,6 +9,7 @@ from uuid import UUID
 class Message:
     pass
 
+
 @dataclass
 class StateUpdate(Message):
     pass
@@ -49,9 +50,7 @@ class PrintJobStateUpdate(StateUpdate):
     printjob_state: str
 
     def __str__(self):
-        return (
-            f"Printjob state: {self.printjob_state}"
-        )
+        return f"Printjob state: {self.printjob_state}"
 
 
 @dataclass
@@ -59,9 +58,7 @@ class KlippyStateUpdate(StateUpdate):
     klippy_state: str
 
     def __str__(self):
-        return (
-            f"Klippy state: {self.klippy_state}"
-        )
+        return f"Klippy state: {self.klippy_state}"
 
 
 @dataclass
@@ -106,8 +103,8 @@ class StartPostPrintSession(Action):
 class PrintSession:
     started_at: datetime
     current_layer: int
-    post_printing_started_at: datetime
+    post_printing_started_at: datetime | None
     moonraker_time: float
-    print_session_id: UUID
+    print_session_id: UUID | None
     metadata_saved: bool
     data_out_dir: Path

@@ -49,14 +49,10 @@ class Controller:
             current_layer=99999999,
             post_printing_started_at=datetime.now(TZ),
             moonraker_time=99999999,
-            print_session_id=99999999,
+            print_session_id=None,
             metadata_saved=False,
             data_out_dir=self._cfg.output_dir,
         )
-
-    @property
-    def print_uuid(self):
-        return self._print_session.print_session_id
 
     async def run(self):
         while True:
@@ -105,15 +101,23 @@ class Controller:
         post_printing = self._printer_state_machine.post_printing
         if post_printing:
             start = self._print_session.post_printing_started_at
+            if start is None:  # if not initialised yet - it should be...
+                start = datetime.now(TZ)
+                self._print_session.post_printing_started_at = start
             elapsed_time = (datetime.now(TZ) - start).total_seconds()
             post_printing_done = elapsed_time >= self._cfg.post_printing_time
             if post_printing_done:
                 logger.debug("Post printing data capture finished")
                 update = PrintJobStateUpdate(printjob_state="data_capture_finished")
-                actions = self._printer_state_machine.apply(update)
                 await self._end_print_session()
+                self._printer_state_machine.apply(
+                    update
+                )  # dont care about actions returned
+                return actions
 
-        actions = self._data_capture_manager.push_data(msg, self.print_uuid)
+        actions = self._data_capture_manager.push_data(
+            msg, self._print_session.print_session_id
+        )
         return actions
 
     async def _handle_actions(self, actions):
@@ -127,9 +131,9 @@ class Controller:
         logger.debug("Preparing new print session")
         output_dir = self._cfg.output_dir / datetime.now(TZ).strftime("%Y%m%d-%H%M%S")
         self._print_session = PrintSession(
-            started_at=datetime.now(TZ),
+            started_at=started_at,
             current_layer=0,
-            post_printing_started_at=started_at,
+            post_printing_started_at=None,
             moonraker_time=99999999,
             print_session_id=session_id,
             metadata_saved=False,
@@ -168,5 +172,6 @@ class Controller:
 
     def should_gather_data(self):
         return bool(
-            self._printer_state_machine.ready() and self._print_session.current_layer
+            self._printer_state_machine.ready()
+            and (self._print_session.current_layer >= 1)
         )
