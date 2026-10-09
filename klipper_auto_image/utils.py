@@ -71,8 +71,7 @@ class ServerInfo(Message):
 
     @property
     def ready(self):
-        if self.klippy_connected and (self.klippy_state == "ready"):
-            return True
+        return self.klippy_connected and (self.klippy_state == "ready")
 
 
 @dataclass

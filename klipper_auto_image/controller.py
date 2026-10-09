@@ -79,10 +79,9 @@ class Controller:
                     logger.debug("New ServerInfo msg: %s", msg)
 
                 elif isinstance(msg, MoonrakerConnected):
-                    if not msg.connection_up:
-                        logger.debug("msg connection down: %s", msg)
-                        break
                     logger.debug("New MoonrakerConnected msg: %s", msg)
+                    if not msg.connection_up:
+                        break
 
                 elif isinstance(msg, SubscriptionUpdate):
                     actions = await self._handle_subscription_msg(msg)
