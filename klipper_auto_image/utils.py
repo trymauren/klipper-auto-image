@@ -1,10 +1,14 @@
+import asyncio
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+
+# from typing import Any
 from uuid import UUID
 
 import numpy as np
+import onnxruntime
 
 
 @dataclass
@@ -125,7 +129,12 @@ class Frame:
 
 
 @dataclass
-class FrameDetection:
+class Detection:
+    pass
+
+
+@dataclass
+class FrameDetection(Detection):
     frame_id: UUID
     detection_id: UUID
     frame_timestamp: datetime
@@ -136,84 +145,46 @@ class FrameDetection:
 
 
 @dataclass
-class Detection:
-    """Detection result"""
-
-    name: str
-    confidence: float
-    box: Box
-
-    @classmethod
-    def from_tuple_list(
-        cls, detections: list[tuple[str, float, tuple[float, float, float, float]]]
-    ) -> list[Detection]:
-        return [Detection.from_tuple(d) for d in detections]
-
-    @classmethod
-    def from_tuple(
-        cls, detection: tuple[str, float, tuple[float, float, float, float]]
-    ) -> Detection:
-        box = Box.from_tuple(detection[2])
-        return Detection(detection[0], float(detection[1]), box)
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> Detection:
-        return Detection(data["name"], data["confidence"], Box(**data["box"]))
+class EmptyFrameDetection(Detection):
+    pass
 
 
-@dataclass
-class Box:
-    """Detection rect"""
+class DefectDetector(ABC):
+    @abstractmethod
+    async def run(self):
+        pass
 
-    xc: float
-    yc: float
-    w: float
-    h: float
+    @abstractmethod
+    async def next_result(self) -> Detection:
+        pass
 
-    @classmethod
-    def from_tuple(cls, box: tuple[float, float, float, float]) -> Box:
-        return Box(xc=float(box[0]), yc=float(box[1]), w=float(box[2]), h=float(box[3]))
 
-    def left(self) -> float:
-        return self.xc - self.w * 0.5
+class ImageDefectDetector(DefectDetector):
+    def __init__(self, session: onnxruntime.InferenceSession):
+        super().__init__()
+        self._inputs: asyncio.Queue[Frame] = asyncio.Queue(maxsize=10_000)
+        self._results: asyncio.Queue[FrameDetection] = asyncio.Queue(maxsize=10_000)
+        self._session = session
+        self._most_recent_result = None
 
-    def right(self) -> float:
-        return self.xc + self.w * 0.5
+    async def push_frame(self, frame: Frame):
+        await self._inputs.put(frame)
 
-    def top(self) -> float:
-        return self.yc - self.h * 0.5
+    async def next_result(self):
+        detection = await self._results.get()
+        return detection
 
-    def bottom(self) -> float:
-        return self.yc + self.h * 0.5
+    def get_latest_result(self):
+        return self._most_recent_result
 
-    def calc_iou(self, other: Box) -> float:
-        """Calculates intersection over union ration which can be used to compare boxes"""
-        al = self.left()
-        ar = self.right()
-        at = self.top()
-        ab = self.bottom()
+    @abstractmethod
+    def _defect_detection(self, frame: Frame) -> Detection:
+        pass
 
-        bl = other.left()
-        br = other.right()
-        bt = other.top()
-        bb = other.bottom()
 
-        i_l = max(al, bl)
-        i_r = min(ar, br)
-        i_t = max(at, bt)
-        i_b = min(ab, bb)
+class Model:
+    pass
 
-        o_l = min(al, bl)
-        o_r = max(ar, br)
-        o_t = min(at, bt)
-        o_b = max(ab, bb)
 
-        i_w = i_r - i_l
-        i_h = i_b - i_t
-        o_w = o_r - o_l
-        o_h = o_b - o_t
-
-        o_a = o_w * o_h
-        if o_a <= 0.0:
-            return 0.0
-        return i_w * i_h / o_a
+class ObicoModel(Model):
+    pass

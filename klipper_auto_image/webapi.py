@@ -1,23 +1,23 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from io import BytesIO
 
+import onnxruntime
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import Response
 
 from klipper_auto_image import custom_logger as logger
 from klipper_auto_image.cameramanager import CameraManager
 from klipper_auto_image.controller import Controller
 from klipper_auto_image.datacapturemanager import DataCaptureManager
-from klipper_auto_image.defectdetection import DefectDetector
 from klipper_auto_image.moonrakerconnector import MoonrakerConnector
 from klipper_auto_image.parsing_utils import get_config
 from klipper_auto_image.statemachine import PrinterStateMachine
+
+from .defectdetection import ObicoDetector
 
 # @dataclass
 # class LatestFrame:
@@ -51,14 +51,19 @@ def run():
         data_capture_manager = DataCaptureManager()
         moonraker_connector = MoonrakerConnector(cfg)
         camera_manager = CameraManager()
-        defect_detector = DefectDetector()
+
+        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        weights = "/home/pi/klipper-auto-image/weights/model-weights-5a6b1be1fa.onnx"
+        onnx_session = onnxruntime.InferenceSession(weights, providers=providers)
+
+        defect_detector = ObicoDetector(session=onnx_session, thresh=0.4, nms=0.3)
         controller = Controller(
             cfg=cfg,
             moonraker_connector=moonraker_connector,
             printer_state_machine=printer_state_machine,
             data_capture_manager=data_capture_manager,
             camera_manager=camera_manager,
-            defect_detector=defect_detector,
+            defect_detectors=[defect_detector],
         )
         app.state.detections = defect_detector
 

@@ -1,5 +1,7 @@
 import asyncio
+from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -8,61 +10,132 @@ import numpy as np
 import onnxruntime
 from PIL import Image
 
-from klipper_auto_image.custom_logger import logger
-from klipper_auto_image.utils import Detection, Frame, FrameDetection
+# from klipper_auto_image.custom_logger import logger
+from klipper_auto_image.utils import (
+    Detection,
+    EmptyFrameDetection,
+    Frame,
+    FrameDetection,
+    ImageDefectDetector,
+)
 
 TZ = ZoneInfo("Europe/Oslo")
 
 
-class DefectDetector:
-    def __init__(self):
-        self._frames: asyncio.Queue[Frame] = asyncio.Queue(maxsize=10_000)
-        self._detections: asyncio.Queue[FrameDetection] = asyncio.Queue(maxsize=10_000)
-        self._cfg = {
-            "providers": ["CUDAExecutionProvider", "CPUExecutionProvider"],
-            "model_weights_path": "/home/pi/klipper-auto-image/weights/model-weights-5a6b1be1fa.onnx",
-            "thresh": 0.4,
-            "nms": 0.3,
-        }
-        self._prepare_model()
-        self._most_recent_image = None
+@dataclass
+class ObicoDetection:
+    """ObicoDetection result"""
+
+    name: str
+    confidence: float
+    box: Box
+
+    @classmethod
+    def from_tuple_list(
+        cls, detections: list[tuple[str, float, tuple[float, float, float, float]]]
+    ) -> list[ObicoDetection]:
+        return [ObicoDetection.from_tuple(d) for d in detections]
+
+    @classmethod
+    def from_tuple(
+        cls, detection: tuple[str, float, tuple[float, float, float, float]]
+    ) -> ObicoDetection:
+        box = Box.from_tuple(detection[2])
+        return ObicoDetection(detection[0], float(detection[1]), box)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ObicoDetection:
+        return ObicoDetection(data["name"], data["confidence"], Box(**data["box"]))
+
+
+@dataclass
+class Box:
+    """ObicoDetection rect"""
+
+    xc: float
+    yc: float
+    w: float
+    h: float
+
+    @classmethod
+    def from_tuple(cls, box: tuple[float, float, float, float]) -> Box:
+        return Box(xc=float(box[0]), yc=float(box[1]), w=float(box[2]), h=float(box[3]))
+
+    def left(self) -> float:
+        return self.xc - self.w * 0.5
+
+    def right(self) -> float:
+        return self.xc + self.w * 0.5
+
+    def top(self) -> float:
+        return self.yc - self.h * 0.5
+
+    def bottom(self) -> float:
+        return self.yc + self.h * 0.5
+
+    def calc_iou(self, other: Box) -> float:
+        """Calculates intersection over union ration which can be used to compare boxes"""
+        al = self.left()
+        ar = self.right()
+        at = self.top()
+        ab = self.bottom()
+
+        bl = other.left()
+        br = other.right()
+        bt = other.top()
+        bb = other.bottom()
+
+        i_l = max(al, bl)
+        i_r = min(ar, br)
+        i_t = max(at, bt)
+        i_b = min(ab, bb)
+
+        o_l = min(al, bl)
+        o_r = max(ar, br)
+        o_t = min(at, bt)
+        o_b = max(ab, bb)
+
+        i_w = i_r - i_l
+        i_h = i_b - i_t
+        o_w = o_r - o_l
+        o_h = o_b - o_t
+
+        o_a = o_w * o_h
+        if o_a <= 0.0:
+            return 0.0
+        return i_w * i_h / o_a
+
+
+class ObicoDetector(ImageDefectDetector):
+    def __init__(
+        self, session: onnxruntime.InferenceSession, thresh: float, nms: float
+    ):
+        self._inputs = asyncio.Queue(maxsize=10_000)
+        self._results = asyncio.Queue(maxsize=10_000)
+        self._session = session
+        self.thresh = thresh
+        self.nms = nms
+        self._most_recent_result = None
 
     async def run(self):
         while True:
-            frame = await self._frames.get()
+            frame = await self._inputs.get()
             frame_with_detections = self._defect_detection(frame)
-            if frame_with_detections is not None:
-                self._most_recent_image = Image.fromarray(
+            if isinstance(frame_with_detections, FrameDetection):
+                self._most_recent_result = Image.fromarray(
                     frame_with_detections.detection_image
                 )
-                await self._detections.put(frame_with_detections)
+                await self._results.put(frame_with_detections)
             else:
-                self._most_recent_image = frame.image
+                self._most_recent_result = frame.image
 
-    async def push_frame(self, frame: Frame):
-        await self._frames.put(frame)
-
-    async def next_detection(self):
-        detection = await self._detections.get()
-        return detection
-
-    def get_latest_image(self):
-        return self._most_recent_image
-
-    def _prepare_model(self):
-        providers = self._cfg["providers"]
-        model_weights = self._cfg["model_weights_path"]
-        self._onnx_session = onnxruntime.InferenceSession(
-            model_weights, providers=providers
-        )
-
-    def _defect_detection(self, frame: Frame):
+    def _defect_detection(self, frame: Frame) -> Detection:
         image = frame.get_opencv_image()
         width = image.shape[1]
         height = image.shape[0]
 
-        input_h = self._onnx_session.get_inputs()[0].shape[2]
-        input_w = self._onnx_session.get_inputs()[0].shape[3]
+        input_h = self._session.get_inputs()[0].shape[2]
+        input_w = self._session.get_inputs()[0].shape[3]
         resized = opencv.resize(
             image, (input_w, input_h), interpolation=opencv.INTER_LINEAR
         )
@@ -71,15 +144,15 @@ class DefectDetector:
         img_in = np.expand_dims(img_in, axis=0)
         img_in /= 255.0
 
-        input_name = self._onnx_session.get_inputs()[0].name
-        outputs = self._onnx_session.run(None, {input_name: img_in})
+        input_name = self._session.get_inputs()[0].name
+        outputs = self._session.run(None, {input_name: img_in})
         detection_batch = self._post_processing(
-            outputs, width, height, self._cfg["thresh"], self._cfg["nms"], "g"
+            outputs, width, height, self.thresh, self.nms, "g"
         )
-        detections = Detection.from_tuple_list(detection_batch[0])
+        detections = ObicoDetection.from_tuple_list(detection_batch[0])
         if len(detections) == 0:
             # logger.debug("No defects detected!")
-            return None
+            return EmptyFrameDetection()
 
         for d in detections:
             opencv.rectangle(

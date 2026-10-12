@@ -20,12 +20,12 @@ class DataCaptureManager:
             "heater_bed": [],  # replace?
         }
         self._sensor_recordings = defaultdict(list)
-        self._current_print_sesssion = None
+        self._current_print_sesssion = None  # unused
 
     def reset(self, session: PrintSession):
         logger.debug("New data capture session started")
         self._sensor_recordings = defaultdict(list)
-        self._current_print_session = session
+        self._current_print_session = session  # unused
 
     async def dump_data(self, file_path: Path):
         async with await anyio.open_file(file_path, "w", encoding="utf-8") as fp:
