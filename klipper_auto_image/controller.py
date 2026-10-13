@@ -70,10 +70,11 @@ class Controller:
     async def run(self):
         async with asyncio.TaskGroup() as tg:
             tg.create_task(self._moonraker_connector_loop())
-            for detector in self._defect_detectors:
-                if isinstance(detector, ImageDefectDetector):
-                    tg.create_task(self._frame_transfer_loop(detector))
-            tg.create_task(self._read_detections_loop())
+            if len(self._defect_detectors):
+                for detector in self._defect_detectors:
+                    if isinstance(detector, ImageDefectDetector):
+                        tg.create_task(self._frame_transfer_loop(detector))
+                tg.create_task(self._read_detections_loop())
 
     async def _moonraker_connector_loop(self):
         while True:

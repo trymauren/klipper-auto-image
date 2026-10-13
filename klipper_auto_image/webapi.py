@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from io import BytesIO
 
 import onnxruntime
 import uvicorn
@@ -10,37 +9,15 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 
 from klipper_auto_image import custom_logger as logger
-from klipper_auto_image.cameramanager import CameraManager
+from klipper_auto_image.cameramanager import CameraMonitor
 from klipper_auto_image.controller import Controller
 from klipper_auto_image.datacapturemanager import DataCaptureManager
+from klipper_auto_image.image_utils import ImageEncodeError
 from klipper_auto_image.moonrakerconnector import MoonrakerConnector
 from klipper_auto_image.parsing_utils import get_config
 from klipper_auto_image.statemachine import PrinterStateMachine
 
 from .defectdetection import ObicoDetector
-
-# @dataclass
-# class LatestFrame:
-#     jpeg_bytes: bytes
-#     processed_at: float
-#     sequence: int
-
-
-# class FrameStore:
-#     def __init__(self):
-#         self._frames: dict[str, LatestFrame] = {}
-#         self._lock = asyncio.Lock()
-#
-#     async def set_frame(self, camera_id, image) -> None:
-#         async with self._lock:
-#             self._frames[camera_id] = image
-#
-#     async def get_frame(self, camera_id: str):
-#         async with self._lock:
-#             return self._frames.get(camera_id)
-#
-#
-# store = FrameStore()
 
 
 def run():
@@ -50,7 +27,7 @@ def run():
         printer_state_machine = PrinterStateMachine(cfg)
         data_capture_manager = DataCaptureManager()
         moonraker_connector = MoonrakerConnector(cfg)
-        camera_manager = CameraManager()
+        camera_manager = CameraMonitor()
 
         providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
         weights = "/home/pi/klipper-auto-image/weights/model-weights-5a6b1be1fa.onnx"
@@ -87,15 +64,16 @@ def run():
 
     @app.get("/monitor/frame")
     async def live_image():
-        frame = app.state.detections.get_latest_image()
-        buffer = BytesIO()
-        frame.save(buffer, format="JPEG", quality=95)
-        logger.info(frame)
+        frame = app.state.detections.get_latest_result()
         if frame is None:
             raise HTTPException(status_code=404, detail="No frame yet")
+        try:
+            bytes_ = frame.to_jpeg()
+        except ImageEncodeError:
+            raise HTTPException(status_code=500, detail="JPEG encode failed")
 
         return Response(
-            content=buffer.getvalue(),
+            content=bytes_,
             media_type="image/jpeg",
             headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
         )
@@ -106,25 +84,3 @@ def run():
         port=8009,
         # log_config=None,  # TODO!
     )
-    # @app.get("/live/{camera_id}/status")
-    # async def live_status(camera_id: str):
-    #     frame = await store.get_frame(camera_id)
-    #     if frame is None:
-    #         return JSONResponse(
-    #             {"camera_id": camera_id, "state": "starting"},
-    #             headers={"Cache-Control": "no-store"},
-    #         )
-    #
-    #     age_seconds = time.time() - frame.processed_at
-    #     state = "live" if age_seconds < 2.0 else "stale"
-    #
-    #     return JSONResponse(
-    #         {
-    #             "camera_id": camera_id,
-    #             "state": state,
-    #             "age_seconds": round(age_seconds, 3),
-    #             "sequence": frame.sequence,
-    #             "processed_at": frame.processed_at,
-    #         },
-    #         headers={"Cache-Control": "no-store"},
-    #     )

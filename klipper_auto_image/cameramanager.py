@@ -1,18 +1,18 @@
 import asyncio
 import time
 from datetime import datetime
-from io import BytesIO
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import requests
-from PIL import Image
 
 from klipper_auto_image import custom_logger as logger
 from klipper_auto_image.utils import Frame, PrintSession
 
 TZ = ZoneInfo("Europe/Oslo")
 from collections.abc import Callable
+
+from klipper_auto_image.image_utils import decode_bytes_to_bgr_array
 
 
 class CameraManager:
@@ -21,7 +21,6 @@ class CameraManager:
         self._cam_names = []
         self._frame_index = 0
         self._fps = 1
-        self._frame_queue: asyncio.Queue[Frame] = asyncio.Queue(maxsize=10)
 
     def configure(self, print_session: PrintSession, cams: list[dict], fps: int):
         self._cams = []
@@ -32,7 +31,6 @@ class CameraManager:
         self._data_out_dir = print_session.data_out_dir
         self._register_cameras(cams)
         self._setup_directories()
-        self._reset_frame_queue()
 
     async def run(self, ready: Callable[..., bool]):
         next_shot = time.monotonic()
@@ -44,20 +42,7 @@ class CameraManager:
             if ready():
                 # t = datetime.now(TZ).strftime("%Y%m%d-%H%M%S")
                 # logger.info("New image should be captured now: %s", t)
-                images = await asyncio.to_thread(self._capture_images)
-                for cam_name, image in images.items():
-                    img = Frame(
-                        self._uuid,
-                        datetime.now(TZ),
-                        image,
-                        cam_name,
-                        Path("dummypath"),
-                    )
-                    await self._frame_queue.put(img)
-
-    async def next_frame(self):
-        frame = await self._frame_queue.get()
-        return frame
+                await asyncio.to_thread(self._capture_images)
 
     def _register_cameras(self, cams: list[dict]):
         logger.info("Will capture images from the following cameras:")
@@ -72,15 +57,7 @@ class CameraManager:
             cam_dir.mkdir(parents=True, exist_ok=True)
             logger.debug("Created directory %s", cam_dir)
 
-    def _reset_frame_queue(self):
-        while True:
-            try:
-                self._frame_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-
     def _capture_images(self):
-        images = {}
         for cam, name in zip(self._cams, self._cam_names):
             t = datetime.now(TZ).strftime("%Y%m%d-%H%M%S")
             path = (
@@ -92,15 +69,8 @@ class CameraManager:
                 response = requests.get(cam, timeout=5)
                 response.raise_for_status()
                 data = response.content
-                with Image.open(BytesIO(data)) as img:
-                    img.load()
-                    img.save(path)
-                    images[name] = img
-
+                path.write_bytes(data)
                 logger.debug("Captured %s", path)
-
-            # except OSError:
-            #     logger.debug("Pillow failed when capturing from %s", cam)
 
             except requests.exceptions.ConnectionError:
                 logger.debug(
@@ -123,4 +93,93 @@ class CameraManager:
                     cam,
                     exc.response.status_code if exc.response is not None else "unknown",
                 )
+
+            except OSError:
+                logger.debug("Pillow failed when capturing from %s", cam)
+
+
+class CameraMonitor(CameraManager):
+    def __init__(self, maxsize=10):
+        super().__init__()
+        self._frame_queue: asyncio.Queue[Frame] = asyncio.Queue(maxsize=maxsize)
+
+    def configure(self, print_session: PrintSession, cams: list[dict], fps: int):
+        super().configure(print_session, cams, fps)
+        self._reset_frame_queue()
+
+    async def run(self, ready: Callable[..., bool]):
+        next_shot = time.monotonic()
+        while True:
+            next_shot += 1 / self._fps
+            await asyncio.sleep(max(0.0, next_shot - time.monotonic()))
+            self._frame_index += 1
+
+            if ready():
+                # t = datetime.now(TZ).strftime("%Y%m%d-%H%M%S")
+                # logger.info("New image should be captured now: %s", t)
+                images = await asyncio.to_thread(self._capture_and_queue_images)
+                for cam_name, image in images.items():
+                    frame = Frame(
+                        self._uuid,
+                        datetime.now(TZ),
+                        decode_bytes_to_bgr_array(image),
+                        cam_name,
+                        Path("dummypath"),
+                    )
+                    await self._frame_queue.put(frame)
+
+    async def next_frame(self):
+        frame = await self._frame_queue.get()
+        return frame
+
+    def _reset_frame_queue(self):
+        while True:
+            try:
+                self._frame_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+    def _capture_and_queue_images(self):
+        images = {}
+        for cam, name in zip(self._cams, self._cam_names):
+            t = datetime.now(TZ).strftime("%Y%m%d-%H%M%S")
+            path = (
+                self._data_out_dir
+                / name
+                / f"frame_{self._frame_index}_id_{self._uuid}_time_{t}.jpg"
+            )
+            try:
+                response = requests.get(cam, timeout=5)
+                response.raise_for_status()
+                data = response.content
+                images[name] = data
+                path.write_bytes(data)
+
+                logger.debug("Captured %s", path)
+
+            except requests.exceptions.ConnectionError:
+                logger.debug(
+                    "Camera %s is unavailable at %s",
+                    name,
+                    cam,
+                )
+
+            except requests.exceptions.Timeout:
+                logger.debug(
+                    "Timed out getting snapshot from camera %s (%s)",
+                    name,
+                    cam,
+                )
+
+            except requests.exceptions.HTTPError as exc:
+                logger.debug(
+                    "Camera %s (%s) returned HTTP %s",
+                    name,
+                    cam,
+                    exc.response.status_code if exc.response is not None else "unknown",
+                )
+
+            except OSError:
+                logger.debug("Pillow failed when capturing from %s", cam)
+
         return images

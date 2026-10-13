@@ -8,7 +8,6 @@ from zoneinfo import ZoneInfo
 import cv2 as opencv
 import numpy as np
 import onnxruntime
-from PIL import Image
 
 # from klipper_auto_image.custom_logger import logger
 from klipper_auto_image.utils import (
@@ -117,20 +116,8 @@ class ObicoDetector(ImageDefectDetector):
         self.nms = nms
         self._most_recent_result = None
 
-    async def run(self):
-        while True:
-            frame = await self._inputs.get()
-            frame_with_detections = self._defect_detection(frame)
-            if isinstance(frame_with_detections, FrameDetection):
-                self._most_recent_result = Image.fromarray(
-                    frame_with_detections.detection_image
-                )
-                await self._results.put(frame_with_detections)
-            else:
-                self._most_recent_result = frame.image
-
     def _defect_detection(self, frame: Frame) -> Detection:
-        image = frame.get_opencv_image()
+        image = frame.frame
         width = image.shape[1]
         height = image.shape[0]
 
@@ -151,7 +138,6 @@ class ObicoDetector(ImageDefectDetector):
         )
         detections = ObicoDetection.from_tuple_list(detection_batch[0])
         if len(detections) == 0:
-            # logger.debug("No defects detected!")
             return EmptyFrameDetection()
 
         for d in detections:
@@ -244,7 +230,8 @@ class ObicoDetector(ImageDefectDetector):
 
         return dets_batch
 
-    def _nms_cpu(self, boxes, confs, nms_thresh=0.5, min_mode=False):
+    @staticmethod
+    def _nms_cpu(boxes, confs, nms_thresh=0.5, min_mode=False):
         x1 = boxes[:, 0]
         y1 = boxes[:, 1]
         x2 = boxes[:, 2]

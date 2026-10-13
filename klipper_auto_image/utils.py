@@ -9,6 +9,9 @@ from uuid import UUID
 
 import numpy as np
 import onnxruntime
+from PIL import Image
+
+from klipper_auto_image.image_utils import encode_bgr_array_to_jpeg_bytes
 
 
 @dataclass
@@ -120,12 +123,18 @@ class PrintSession:
 class Frame:
     frame_id: UUID
     frame_timestamp: datetime
-    image: np.ndarray
+    frame: np.ndarray  # BGR uint8
     cam_name: str
     path: Path
 
-    def get_opencv_image(self):
-        return np.array(self.image)[:, :, ::-1].copy()
+    def to_opencv(self):
+        return np.array(self.frame)[:, :, ::-1].copy()
+
+    def to_jpeg(self, q=85) -> bytes:
+        return encode_bgr_array_to_jpeg_bytes(self.frame, q)
+
+    def to_pil(self):
+        return Image.fromarray(self.frame[..., ::-1])
 
 
 @dataclass
@@ -139,7 +148,7 @@ class FrameDetection(Detection):
     detection_id: UUID
     frame_timestamp: datetime
     detections_timestamp: datetime
-    detection_image: np.ndarray
+    detection_frame: np.ndarray
     cam_name: str
     path: Path
 
@@ -165,7 +174,17 @@ class ImageDefectDetector(DefectDetector):
         self._inputs: asyncio.Queue[Frame] = asyncio.Queue(maxsize=10_000)
         self._results: asyncio.Queue[FrameDetection] = asyncio.Queue(maxsize=10_000)
         self._session = session
-        self._most_recent_result = None
+        self._most_recent_result: FrameDetection | Frame | None = None
+
+    async def run(self):
+        while True:
+            frame = await self._inputs.get()
+            frame_with_detections = self._defect_detection(frame)
+            if isinstance(frame_with_detections, FrameDetection):
+                self._most_recent_result = frame_with_detections.detection_frame
+                await self._results.put(frame_with_detections)
+            else:
+                self._most_recent_result = frame
 
     async def push_frame(self, frame: Frame):
         await self._inputs.put(frame)
