@@ -1,4 +1,5 @@
 # import asyncio
+import asyncio
 import json
 
 # from collections import defaultdict
@@ -7,14 +8,20 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import anyio
+import cv2 as opencv
 
 # from pathlib import Path # anyio also has path
 from klipper_auto_image import custom_logger as logger
 from klipper_auto_image.cameramanager import CameraManager
 from klipper_auto_image.datacapturemanager import DataCaptureManager
+
+# from klipper_auto_image.defectdetection import DefectDetector
 from klipper_auto_image.moonrakerconnector import MoonrakerConnector
 from klipper_auto_image.statemachine import PrinterStateMachine
 from klipper_auto_image.utils import (
+    DefectDetector,
+    FrameDetection,
+    ImageDefectDetector,
     MoonrakerConnected,
     # PrinterStateUpdate,
     PrintJobStateUpdate,
@@ -36,12 +43,14 @@ class Controller:
         data_capture_manager: DataCaptureManager,
         moonraker_connector: MoonrakerConnector,
         camera_manager: CameraManager,
+        defect_detectors: list[DefectDetector],
         cfg,
     ):
         self._data_capture_manager = data_capture_manager
         self._printer_state_machine = printer_state_machine
         self._moonraker_connector = moonraker_connector
         self._camera_manager = camera_manager
+        self._defect_detectors = defect_detectors
         self._cfg = cfg
         # self._print_session: PrintSession
         self._print_session = PrintSession(
@@ -55,6 +64,15 @@ class Controller:
         )
 
     async def run(self):
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(self._moonraker_connector_loop())
+            if len(self._defect_detectors):
+                for detector in self._defect_detectors:
+                    if isinstance(detector, ImageDefectDetector):
+                        tg.create_task(self._frame_transfer_loop(detector))
+                tg.create_task(self._read_detections_loop())
+
+    async def _moonraker_connector_loop(self):
         while True:
             await self._moonraker_connector.wait_until_connected()
             try:
@@ -86,6 +104,31 @@ class Controller:
                 elif isinstance(msg, SubscriptionUpdate):
                     actions = await self._handle_subscription_msg(msg)
                     await self._handle_actions(actions)
+
+    async def _frame_transfer_loop(self, detector):
+        while True:
+            frame = await self._camera_manager.next_frame()
+            await detector.push_frame(frame)
+
+    async def _read_detections_loop(self):
+
+        # async def _write_detection_to_file(detection: FrameDetection):
+        #     file_dir = self._print_session.data_out_dir / "detections"
+        #     file_dir.mkdir(parents=True, exist_ok=True)
+        #     file_path = (
+        #         file_dir
+        #         / f"detection_by_{detection.cam_name}_uuid_{detection.detection_id}_time_{detection.detections_timestamp.strftime('%Y%m%d-%H%M%S')}.png"
+        #     )
+        #     await asyncio.to_thread(
+        #         opencv.imwrite, file_path, detection.detection_image
+        #     )
+
+        while True:
+            for defect_detector in self._defect_detectors:
+                logger.info("Waiting for detections")
+                detection = await defect_detector.next_result()
+                logger.info("New detection!")
+                # await _write_detection_to_file(detection)
 
     async def _handle_subscription_msg(self, msg: SubscriptionUpdate):
         # logger.debug("New subscription msg: %s", msg)

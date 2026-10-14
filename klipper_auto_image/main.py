@@ -21,12 +21,14 @@ async def _run(cfg) -> None:
         printer_state_machine=printer_state_machine,
         data_capture_manager=data_capture_manager,
         camera_manager=camera_manager,
+        defect_detectors=[],
     )
 
     async with asyncio.TaskGroup() as tg:
         tg.create_task(moonraker_connector.run())
         tg.create_task(controller.run())
         tg.create_task(camera_manager.run(controller.should_gather_data))
+        # tg.create_task(defect_detector.run())
 
 
 def run() -> None:
