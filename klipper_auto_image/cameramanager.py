@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -46,7 +47,7 @@ class CameraManager:
         self._setup_directories()
         self._configured = True
 
-    async def run(self, ready: Callable[..., bool]):
+    async def run(self, ready: Callable[..., bool], metadata_provider: Callable[..., dict] = dict):
         next_shot = time.monotonic()
         while True:
             next_shot += 1 / self._fps
@@ -66,7 +67,7 @@ class CameraManager:
                     self._data_out_dir,
                     self._frame_index,
                 )
-                await asyncio.to_thread(self._capture_images, snapshot_args)
+                await asyncio.to_thread(self._capture_images, snapshot_args, metadata_provider())
 
     def _register_cameras(self, cams: list[dict]):
         logger.info("Will capture images from the following cameras:")
@@ -81,7 +82,7 @@ class CameraManager:
             cam_dir.mkdir(parents=True, exist_ok=True)
             logger.debug("Created directory %s", cam_dir)
 
-    def _capture_images(self, snapshot_args: SnapshotArgs):
+    def _capture_images(self, snapshot_args: SnapshotArgs, metadata: dict):
         uuid = snapshot_args.uuid
         cams = snapshot_args.cams
         cam_names = snapshot_args.cam_names
@@ -96,6 +97,17 @@ class CameraManager:
                 response.raise_for_status()
                 data = response.content
                 path.write_bytes(data)
+
+                sidecar = {
+                    "frame_index": frame_index,
+                    "camera": name,
+                    "print_id": str(uuid),
+                    "time": t,
+                    **metadata,
+                }
+                path.with_suffix(".json").write_text(
+                    json.dumps(sidecar, ensure_ascii=False, indent=4), encoding="utf-8"
+                )
 
                 logger.debug("Captured %s", path)
 
@@ -134,7 +146,7 @@ class CameraMonitor(CameraManager):
         super().configure(print_session, cams, fps)
         self._reset_frame_queue()
 
-    async def run(self, ready: Callable[..., bool]):
+    async def run(self, ready: Callable[..., bool], metadata_provider: Callable[..., dict] = dict):
         next_shot = time.monotonic()
         while True:
             next_shot += 1 / self._fps
@@ -155,7 +167,7 @@ class CameraMonitor(CameraManager):
                     self._frame_index,
                 )
                 images = await asyncio.to_thread(
-                    self._capture_and_queue_images, snapshot_args
+                    self._capture_and_queue_images, snapshot_args, metadata_provider()
                 )
                 for cam_name, image in images.items():
                     frame = Frame(
@@ -178,7 +190,7 @@ class CameraMonitor(CameraManager):
             except asyncio.QueueEmpty:
                 break
 
-    def _capture_and_queue_images(self, snapshot_args: SnapshotArgs):
+    def _capture_and_queue_images(self, snapshot_args: SnapshotArgs, metadata: dict):
         uuid = snapshot_args.uuid
         cams = snapshot_args.cams
         cam_names = snapshot_args.cam_names
@@ -194,6 +206,17 @@ class CameraMonitor(CameraManager):
                 data = response.content
                 images[name] = data
                 path.write_bytes(data)
+
+                sidecar = {
+                    "frame_index": frame_index,
+                    "camera": name,
+                    "print_id": str(uuid),
+                    "time": t,
+                    **metadata,
+                }
+                path.with_suffix(".json").write_text(
+                    json.dumps(sidecar, ensure_ascii=False, indent=4), encoding="utf-8"
+                )
 
                 logger.debug("Captured %s", path)
 

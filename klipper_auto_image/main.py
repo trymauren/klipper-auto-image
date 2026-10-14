@@ -52,7 +52,9 @@ async def _run(cfg) -> None:
     async with asyncio.TaskGroup() as tg:
         tg.create_task(moonraker_connector.run())
         tg.create_task(controller.run())
-        tg.create_task(camera_manager.run(controller.should_gather_data))
+        tg.create_task(
+            camera_manager.run(controller.should_gather_data, data_capture_manager.get_frame_metadata)
+        )
         for defect_detector in defect_detectors:
             tg.create_task(defect_detector.run())
 
