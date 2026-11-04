@@ -54,7 +54,7 @@ uninstall: ## Uninstall Klipper auto image
 update: ## Update Klipper auto image (via git Repository)
 	@git fetch && git pull
 	@sudo systemctl daemon-reload
-	@sudo systemctl restart myservice
+	@sudo systemctl restart klipper-auto-image
 
 help: ## Show this help
 	@printf "\nKlipper auto image Install Helper:\n"
