@@ -36,10 +36,11 @@ install: ## Install klipper auto image as service
 	@cp -f "${PWD}/resources/klipper-auto-image.conf" $(CONF_PATH)
 	@printf "\nPopulate new service file ... \n"
 	@sudo systemctl daemon-reload
-	@sudo echo "klipper-auto-image" >> $(PRINTER_DATA_PATH)/moonraker.asvc
 	@printf "\nEnable Klipper auto image service ... \n"
 	@sudo systemctl enable klipper-auto-image
-	@printf "\nTo be sure, everything is setup please reboot ...\n"
+	@printf "\nEdit config file at $(CONF_PATH)/klipper-auto-image.conf ...\n"
+	@printf "\nAfter saving config file edits, reboot the machine or run ...\n"
+	@printf "\nsudo systemctl start klipper-auto-image ...\n"
 
 uninstall: ## Uninstall Klipper auto image
 	@printf "\nDisable Klipper auto image service ... \n"
@@ -52,6 +53,8 @@ uninstall: ## Uninstall Klipper auto image
 
 update: ## Update Klipper auto image (via git Repository)
 	@git fetch && git pull
+	@sudo systemctl daemon-reload
+	@sudo systemctl restart myservice
 
 help: ## Show this help
 	@printf "\nKlipper auto image Install Helper:\n"
