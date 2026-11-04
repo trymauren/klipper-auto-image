@@ -90,7 +90,11 @@ class CameraManager:
 
         for cam, name in zip(cams, cam_names):
             t = datetime.now(TZ).strftime("%Y%m%d-%H%M%S")
-            path = data_out_dir / name / f"frame_{frame_index}_id_{uuid}_time_{t}.jpg"
+            path = (
+                data_out_dir
+                / name
+                / f"frame_{frame_index}_id_{uuid}_time_{t}_{name}.jpg"
+            )
             try:
                 response = requests.get(cam, timeout=5)
                 response.raise_for_status()
@@ -187,7 +191,11 @@ class CameraMonitor(CameraManager):
         images = {}
         for cam, name in zip(cams, cam_names):
             t = datetime.now(TZ).strftime("%Y%m%d-%H%M%S")
-            path = data_out_dir / name / f"frame_{frame_index}_id_{uuid}_time_{t}.jpg"
+            path = (
+                data_out_dir
+                / name
+                / f"frame_{frame_index}_id_{uuid}_time_{t}_{name}.jpg"
+            )
             try:
                 response = requests.get(cam, timeout=5)
                 response.raise_for_status()
