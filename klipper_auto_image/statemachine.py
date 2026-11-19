@@ -37,13 +37,13 @@ class PrinterStateMachine:
     def time_now(self):
         return datetime.now(TZ)
 
-    def ready(self):
-        score = 0
-        if self.printing:
-            score += 1
-        if self.klippy_ready:
-            score += 1
-        return score == 2
+    # def ready(self):
+    #     score = 0
+    #     if self.printing:
+    #         score += 1
+    #     if self.klippy_ready:
+    #         score += 1
+    #     return score == 2
 
     def apply(self, update: StateUpdate) -> list[Action]:
         actions = []

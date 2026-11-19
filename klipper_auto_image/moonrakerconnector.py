@@ -68,6 +68,7 @@ class MoonrakerConnector:
         """
         delay = 1
         while True:
+            err: BaseException | None = None
             try:
                 async with websockets.connect(self._cfg.ws_uri) as ws:
                     delay = 1
@@ -77,22 +78,30 @@ class MoonrakerConnector:
                     msg = MoonrakerConnected(True)
                     await self._notifications.put(msg)
                     logger.info(
-                        f"Client is connected to Moonraker server at {self._cfg.ws_uri}"
+                        f"Client is connected to Moonraker Websocket at {self._cfg.ws_uri}"
                     )
                     async with asyncio.TaskGroup() as tg:
-                        tg.create_task(self._ws_reader())
-                        tg.create_task(self._server_info_monitor())
+                        reader = tg.create_task(self._ws_reader())
+                        monitor = tg.create_task(self._server_info_monitor())
+                        await reader # if reader exits cleanly, the monitor should be stopped
+                        monitor.cancel() # if reader exits cleanly, the monitor should be stopped
+                    err = ConnectionError("Connection closed") # in case clean exit, it is logged and reconnect starts
 
-            except (websockets.ConnectionClosed, OSError) as e:
+            except Exception as e:
+                err = e
+            
+            wait = min(delay, 30)
+            if self._connected.is_set():
                 msg = MoonrakerConnected(False)
                 await self._notifications.put(msg)
-                self._ws = None
-                self._fail_all_pending(e)
-                self._connected.clear()
-                wait = min(delay, 30)
-                logger.info(f"Disconnected ({e}), retry in {wait:.1f}s")
-                await asyncio.sleep(wait)
-                delay = min(delay * 2, 30)
+                logger.info(f"Disconnected ({err!r})")
+            else:
+                logger.debug(f"Disconnected ({err!r}), retry in {wait:.1f}s")
+            self._ws = None
+            self._fail_all_pending(err)
+            self._connected.clear()
+            await asyncio.sleep(wait)
+            delay = min(delay * 2, 30)
 
     async def wait_until_connected(self):
         await self._connected.wait()
@@ -152,9 +161,9 @@ class MoonrakerConnector:
             if result is not None:
                 available_objects = msg["result"]["objects"]
             elif msg.get("error") is not None:
-                logger.warning(CHECK_MOONRAKER_LOG)
+                logger.info(CHECK_MOONRAKER_LOG)
             else:
-                logger.error(UNKNOWN_MSG)
+                logger.warning(UNKNOWN_MSG)
         # logger.debug("Available printer objects: %s", available_objects)
         sensor_objects = {}
         for available_obj in available_objects:
@@ -172,15 +181,15 @@ class MoonrakerConnector:
                 printjob_state = result["status"]["print_stats"]["state"]
                 notification = PrintJobStateUpdate(printjob_state=printjob_state)
                 await self._notifications.put(notification)
-                logger.debug(
-                    "Printjob state obtained from successful subscription: %s",
-                    printjob_state,
-                )
+                # logger.debug(
+                #     "Printjob state obtained from successful subscription: %s",
+                #     printjob_state,
+                # )
                 logger.info(SUCCESSFUL_SUBSCRIPTION)
             elif msg.get("error") is not None:
-                logger.warning(CHECK_MOONRAKER_LOG)
+                logger.info(CHECK_MOONRAKER_LOG)
             else:
-                logger.error(UNKNOWN_MSG)
+                logger.warning(UNKNOWN_MSG)
 
     async def query(self, method: str, params: dict):
         if not self._connected.is_set():
@@ -202,9 +211,9 @@ class MoonrakerConnector:
                 await self._notifications.put(msg)
 
             elif msg.get("error") is not None:
-                logger.warning(CHECK_MOONRAKER_LOG)
+                logger.info(CHECK_MOONRAKER_LOG)
             else:
-                logger.error(UNKNOWN_MSG)
+                logger.warning(UNKNOWN_MSG)
 
             await asyncio.sleep(delay)
 

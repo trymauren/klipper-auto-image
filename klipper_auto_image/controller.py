@@ -79,28 +79,25 @@ class Controller:
                 await self._moonraker_connector.subscribe(
                     self._data_capture_manager.sensor_objects
                 )
-                logger.debug("Controller has subscribed to moonraker")
             except ConnectionError:
                 logger.debug("Failed to subscribe. Connection not ready.")
+                await asyncio.sleep(0.5)
                 continue
-
+ 
             while True:
                 msg = await self._moonraker_connector.next_msg()
                 if isinstance(msg, StateUpdate):
-                    logger.debug("New status update: %s", msg)
+                    logger.debug("StateUpdate: %s", msg)
                     actions = self._printer_state_machine.apply(msg)
                     await self._handle_actions(actions)
                 elif isinstance(msg, ServerInfo):
+                    logger.debug("ServerInfo: %s", msg)
                     if not msg.ready:
-                        logger.debug("msg not ready: %s", msg)
                         break
-                    logger.debug("New ServerInfo msg: %s", msg)
-
                 elif isinstance(msg, MoonrakerConnected):
-                    logger.debug("New MoonrakerConnected msg: %s", msg)
+                    logger.debug("MoonrakerConnected: %s", msg)
                     if not msg.connection_up:
                         break
-
                 elif isinstance(msg, SubscriptionUpdate):
                     actions = await self._handle_subscription_msg(msg)
                     await self._handle_actions(actions)
@@ -214,6 +211,6 @@ class Controller:
 
     def should_gather_data(self):
         return bool(
-            self._printer_state_machine.ready()
+            self._printer_state_machine.printing
             and (self._print_session.current_layer >= 1)
         )
